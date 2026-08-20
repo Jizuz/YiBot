@@ -16,13 +16,17 @@ def get_db():
 
 @router.post("/add", response_model=user_schema.UserBase)
 def add_user(user: user_schema.UserCreate, db: Session = Depends(get_db)):
-    if user.mobile:
-        exist_user = user_repository.query_user_by_mobile(db, user.mobile)
-        if exist_user:
-            raise HTTPException(status_code=400, detail="手机号已经被注册")
+    if not user.mobile:
+        raise HTTPException(status_code=400, detail="手机号输入异常")
+
+    # 校验手机号注册
+    exist_user = user_repository.query_user_by_mobile(db, user.mobile)
+    if exist_user:
+        raise HTTPException(status_code=400, detail="手机号已经被注册")
 
     db_user = user_repository.create_user(db, user)
     print(f"user add_user success, db_user: {db_user.__repr__}")
+    db_user = user_repository.query_user_by_mobile(db, user.mobile)
     return db_user
 
 @router.get("/detail/mobile")
