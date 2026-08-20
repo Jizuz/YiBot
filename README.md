@@ -82,11 +82,11 @@ use chatte;
 -- 用户表
 create table if not exists user (
     `id` bigint unsigned NOT NULL AUTO_INCREMENT comment '主键ID',
-    `name` varchar(200) NOT NULL comment '用户名字',
+    `name` varchar(200) DEFAULT NULL comment '用户名字',
     `full_name` varchar(512) DEFAULT NULL comment '用户全名',
-    `password` varchar(200) DEFAULT NULL comment '用户密码',
+    `password` varchar(200) NOT NULL comment '用户密码',
     `hash_pwd` varchar(200) DEFAULT NULL comment 'hash密码',
-    `mobile` varchar(20) DEFAULT NULL comment '用户手机号',
+    `mobile` varchar(20) NOT NULL comment '用户手机号',
     `email` varchar(32) DEFAULT NULL comment '用户邮箱',
     `id_type` tinyint DEFAULT 0 comment '证件类型 取值：0-身份证 1-护照',
     `id_number` varchar(100) DEFAULT NULL comment '证件号码',
@@ -96,7 +96,7 @@ create table if not exists user (
     `is_delete` tinyint DEFAULT 0 comment '删除标记 取值：0-未删除 1-已删除',
     `version` int DEFAULT 0 comment '版本号',
     PRIMARY KEY (`id`),
-    KEY `idx_name` (`name`)
+    KEY `idx_mobile` (`mobile`)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT = '用户表';
 ```
 
