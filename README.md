@@ -40,7 +40,7 @@ python -m venv .venv
 source .venv/bin/activate
 
 # 安装依赖
-pip install langchain langchain_openai langchain_tavily langgraph dotenv fastapi sqlalchemy chroma
+pip install langchain langchain_openai langchain_tavily langchain-mcp-adapters langgraph dotenv fastapi sqlalchemy chroma pymysql redis
 
 # 配置环境变量
 .env.dev
@@ -99,3 +99,36 @@ create table if not exists user (
     KEY `idx_mobile` (`mobile`)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT = '用户表';
 ```
+```sql
+use chatte;
+
+-- 会话主表
+CREATE TABLE if not exists session (
+  `id` bigint NOT NULL AUTO_INCREMENT,
+  `session_id` varchar(64) NOT NULL COMMENT '全局会话UUID',
+  `user_id` varchar(64) NOT NULL COMMENT '用户ID',
+  `status` varchar(16) NOT NULL DEFAULT 'active' COMMENT 'active/frozen/closed',
+  `create_time` datetime DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `last_active_time` datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '最后活跃时间',
+  `close_time` datetime DEFAULT NULL COMMENT '关闭时间',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_session_id` (`session_id`),
+  KEY `idx_user_time` (`user_id`,`last_active_time`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='会话主表';
+```
+```sql
+use chatte;
+
+-- 会话消息表
+CREATE TABLE if not exists session_message (
+  `id` bigint NOT NULL AUTO_INCREMENT,
+  `session_id` varchar(64) NOT NULL COMMENT '会话UUID',
+  `type` tinyint DEFAULT 0 COMMENT '取值 0-用户消息 1-AI消息',
+  `content` text COMMENT '用户消息',
+  `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  PRIMARY KEY (`id`),
+  KEY `idx_session_id` (`session_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='会话消息明细';
+```
+
+## 注意事项
