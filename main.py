@@ -35,6 +35,6 @@ async def root():
     """根路径"""
     return {"message": "哈哈哈"}
 
-# if __name__ == "__main__":
-#     import uvicorn
-#     uvicorn.run(app="main:app", host="127.0.0.1", port=8000, reload=True)
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app="main:app", host="127.0.0.1", port=8000, reload=True)

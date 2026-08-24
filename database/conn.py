@@ -1,4 +1,5 @@
 import os
+import threading
 from dotenv import load_dotenv
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -19,3 +20,9 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 # 声明基类
 Base = declarative_base()
+
+# 异步装饰器
+def async_db_save(func):
+    def wrapper(*args, **kwargs):
+        threading.Thread(target=func, args=args, kwargs=kwargs, daemon=True).start()
+    return wrapper
