@@ -99,11 +99,3 @@ create table if not exists user (
     KEY `idx_mobile` (`mobile`)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT = '用户表';
 ```
-
-
-## 注意事项
-
-⚠️ **医疗免责声明**
-- 本系统仅供健康管理参考，不能替代专业医疗诊断
-- 遇到紧急情况请立即就医
-- 用药调整需咨询医生
