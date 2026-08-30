@@ -40,7 +40,7 @@ python -m venv .venv
 source .venv/bin/activate
 
 # 安装依赖
-pip install langchain langchain_openai langchain_tavily langchain-mcp-adapters langgraph dotenv fastapi sqlalchemy chroma pymysql redis
+pip install langchain langchain_openai langchain_tavily langchain-mcp-adapters langgraph dotenv fastapi sqlalchemy pymysql redis langchain-chroma chromadb chroma langchain_community bs4 jieba rank_bm25
 
 # 配置环境变量
 .env.dev

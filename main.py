@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from api.chat import router as ChatRouter
 from api.user import router as UserRouter
+from api.rag import router as RagRouter
 
 import sys
 sys.dont_write_bytecode = True
@@ -29,6 +30,7 @@ app.add_middleware(
 
 app.include_router(ChatRouter)
 app.include_router(UserRouter)
+app.include_router(RagRouter)
 
 @app.get("/")
 async def root():
