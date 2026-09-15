@@ -17,7 +17,7 @@ Python / FastAPI / LangChain / LangGraph / MySQL / Chroma / BM25 / Redis / Pydan
 - LangChain - Agent框架
 - LangGraph - 流程编排框架
 - **LLM**:
-  - ✅ 智谱AI GLM-4（推荐，免费）⭐
+  - ✅ GLM-4.7 / Qwen-3.7
   - ✅ 千问向量模型 text-embedding-v3
 - ChromaDB - 向量数据库
 - SQLAlchemy - ORM
