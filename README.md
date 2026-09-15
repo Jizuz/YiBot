@@ -1,13 +1,15 @@
 # YiBot
-基于langchain、langgraph，集成RAG、MCP、tavily等工具的医疗问诊、购药、专业咨询玩具平台
+基于 langgraph 的多 Agent 编排的智能分诊与问诊平台
 
 ## 核心特征
-- 🤖 **AI智能体引擎**：基于LangChain、LangGraph的Agent框架，具备自主推理和决策能力
+- 🤖 **分层编排架构**：Supervisor + 子 Agent 分层编排架构，Supervisor 通过 Pydantic 结构化输出做意图识别与动态路由，子 Agent 用 LangGraph Command 实现运行时动态分派与状态回传
 - 🛠️ **工具调用系统**：支持多种工具动态调用
-- 💬 **自然语言交互**：支持多轮对话，理解上下文
+- 💬 **自然语言交互**：支持多轮对话，用 状态标记 + 硬路由 解决 Supervisor 软判断导致的分诊漏执行问题，将“症状采集 → 分诊”链路的确定性从依赖 LLM 提升为系统保证
 - 📚 **知识库检索**：RAG技术，提供专业医疗建议
+- 🔐 **安全机制**：规则层 + LLM 层双层安全机制：P0 红旗症状前置拦截、越界请求正则识别，紧急情况跳过常规问诊直接给出急救指引
 
 ## 技术栈
+Python / FastAPI / LangChain / LangGraph / MySQL / Chroma / BM25 / Redis / Pydantic
 
 ### 后端
 - python 3.13+
