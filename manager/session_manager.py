@@ -1,20 +1,24 @@
 from datetime import datetime
 from typing import List, Optional
+import os
 import uuid
 import redis
+from dotenv import load_dotenv
 
 from database import session_repository
 from database.conn import async_db_save
 
+load_dotenv()
+
 SESSION_EXPIRE_SECONDS = 900  # 15分钟会话超时
 
-# Redis配置
+# Redis配置（REDIS_PASSWORD 需与 redis.conf 中 requirepass 一致）
 REDIS_CLIENT = redis.Redis(
-    host="127.0.0.1",
-    port=6379,
+    host=os.getenv("REDIS_HOST", "127.0.0.1"),
+    port=int(os.getenv("REDIS_PORT", "6379")),
     db=0,
+    password=os.getenv("REDIS_PASSWORD") or None,
     decode_responses=True,
-    retry_on_timeout=True
 )
 
 class SessionManager:

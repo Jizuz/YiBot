@@ -1,23 +1,36 @@
 # 创建FastAPI应用实例
 from fastapi import FastAPI
+from fastapi.concurrency import asynccontextmanager
 from fastapi.middleware.cors import CORSMiddleware
 
+from agent.supervisor import build_graph
 from api.chat import router as ChatRouter
 from api.user import router as UserRouter
 from api.rag import router as RagRouter
 
-import sys
-sys.dont_write_bytecode = True
+from database.conn import create_checkpointer
 
+app_state = {}
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    checkpointer, pool = await create_checkpointer()
+    app.state.graph = build_graph(checkpointer)
+    app.state.pool = pool
+    yield
+    pool.close()
+    await pool.wait_closed()
+    
 app = FastAPI(
-    title="医疗测试",
+    title="医疗Agent",
     version="1.0.0",
     description="这是一个智能医疗测试API，用于问诊咨询、挂号、开方等功能",
     terms_of_service="http://jk.cn",
     contact={
         "author": "jizuz",
         "email": "qpf123@outlook.com"
-    }
+    },
+    lifespan=lifespan,
 )
 
 app.add_middleware(

@@ -1,12 +1,8 @@
 from typing import Optional
-
-from fastapi import APIRouter, Query
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, Query, Request
 from pydantic import BaseModel
 
-from llm.simple_agent import get_agent_response
 from llm.simple_chat_model import get_ai_response
-from llm.supervision import thinking_and_action
 from manager.session_manager import SessionManager
 
 router = APIRouter(prefix="/chat", tags=["聊天管理"])
@@ -18,13 +14,23 @@ def common_chat(chats: str):
     return {"message": response}
 
 @router.get("/agent")
-async def common_ask_agent(question: str):
+async def common_ask_agent(question: str, session_id: str, request: Request):
     """agent回答问题"""
+    print('common_ask_agent start...')
 
-    return StreamingResponse(
-        thinking_and_action(question),
-        media_type="text/event-stream",
+    graph = request.app.state.graph
+    thread_id = f"user-{session_id}"
+    config = {"configurable": {"thread_id": thread_id}}
+    result = await graph.ainvoke(
+        {"messages": [{"role": "user", "content": question}], "session_id": session_id},
+        config=config,
     )
+    last = result["messages"][-1]
+    return {
+        "reply": last.content,
+        "need_emergency": result.get("need_emergency", False),
+        "active_agent": result.get("active_agent"),
+    }
 
 class ChatMessageReq(BaseModel):
     user_id: str
