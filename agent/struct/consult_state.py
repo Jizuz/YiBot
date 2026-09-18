@@ -14,4 +14,4 @@ class ConsultState(TypedDict):
     pending_triage: bool          # 症状采集完成后置 True
     symptom_summary: str | None   # 采集到的症状总结，供分诊使用
     rights_answered: bool         # rights_agent 已给出回复(仅 rights_agent 读写, 用于拦截 supervisor 无新输入的重复路由)
-    rights_booking: dict | None   # 权益预约流程槽位状态(仅 rights_agent 读写): stage/name/mobile/datetime/desired_right/location/chosen_store/right_id
+    rights_appointing: dict | None   # 权益预约流程槽位状态(仅 rights_agent 读写): stage/name/mobile/datetime/desired_right/location/chosen_store/right_id

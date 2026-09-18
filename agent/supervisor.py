@@ -51,7 +51,7 @@ async def supervisor_node(state: ConsultState) -> Command:
 
     # 硬路由：权益预约流程进行中(槽位未清空)，用户本轮回复大概率是流程输入(补信息/选门店/取消)，
     # 无条件回 rights_agent；若本轮内容与预约无关，rights_agent 会自动回落到查询流程处理
-    if state.get("rights_booking"):
+    if state.get("rights_appointing"):
         return Command(
             goto="rights_agent",
             update={

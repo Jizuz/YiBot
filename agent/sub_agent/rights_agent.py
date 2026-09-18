@@ -7,7 +7,7 @@ from langchain_core.messages import AIMessage, SystemMessage
 from langgraph.types import Command
 
 from agent.struct.consult_state import ConsultState
-from agent.struct.schemas import BookingTurn, RightMatch, RightsIntent
+from agent.struct.schemas import AppointingTurn, RightMatch, RightsIntent
 from llm.base_llm import chat_model
 from tools.mcp import get_mcp_tools
 
@@ -32,16 +32,16 @@ RIGHTS_PROMPT = """你是用户权益服务助手，负责帮助用户查询和�
 
 
 # ==================== 权益预约流程 ====================
-# 跨请求多轮状态机(槽位持久化在 ConsultState.rights_booking):
+# 跨请求多轮状态机(槽位持久化在 ConsultState.rights_appointing):
 # collect(姓名/手机号/日期/意向权益) -> get_right_list 匹配 rightId -> valid_right 校验
 #   -> wait_location -> get_nearby_stores -> wait_store(用户选店) -> appoint_service 下单
 # 任一环节失败/用户取消: 委婉终止并清空状态, 本次不预约。
 
 RIGHTS_INTENT_PROMPT = """判断用户当前对"医疗健康权益"的诉求类型，只输出分类：
 - query：查询/了解类（查我有什么权益、看有效期、问哪家门店可以用等）
-- booking：使用/办理类（我想用某项权益、帮我预约洁牙、我要使用体检卡等）"""
+- appointing：使用/办理类（我想用某项权益、帮我预约洁牙、我要使用体检卡等）"""
 
-BOOKING_TURN_PROMPT = """你是医疗健康权益的预约助手，正在通过多轮对话为用户办理权益使用预约。
+APPOINTING_TURN_PROMPT = """你是医疗健康权益的预约助手，正在通过多轮对话为用户办理权益使用预约。
 
 今天是 {today}。
 
@@ -72,9 +72,9 @@ RIGHT_MATCH_PROMPT = """你是权益匹配助手。
 - 最新回复无法判断但此前意向明确唯一对应某项时，返回该项的 rightId
 - 无法唯一确定时，rightId 返回 null"""
 
-BOOKING_SERVICE_DOWN_MSG = "抱歉，权益预约服务暂时不太稳定，为避免出错本次就先不为您预约啦～您可以稍后再试，或联系客服协助处理，感谢理解！"
-BOOKING_CANCEL_MSG = "好的，已为您取消本次预约申请～您随时想预约都可以再找我，祝您生活愉快！"
-BOOKING_VALID_FAIL_MSG = "很抱歉，您选择的权益暂未通过核验（可能已过期或不满足使用条件），本次就先不为您安排预约啦～您可以看看名下其他权益，或联系客服核实，感谢理解！"
+APPOINTING_SERVICE_DOWN_MSG = "抱歉，权益预约服务暂时不太稳定，为避免出错本次就先不为您预约啦～您可以稍后再试，或联系客服协助处理，感谢理解！"
+APPOINTING_CANCEL_MSG = "好的，已为您取消本次预约申请～您随时想预约都可以再找我，祝您生活愉快！"
+APPOINTING_VALID_FAIL_MSG = "很抱歉，您选择的权益暂未通过核验（可能已过期或不满足使用条件），本次就先不为您安排预约啦～您可以看看名下其他权益，或联系客服核实，感谢理解！"
 
 _SLOT_LABELS = [
     ("user_name", "姓名"), ("mobile", "手机号"), ("appoint_datetime", "预约日期"),
@@ -82,8 +82,8 @@ _SLOT_LABELS = [
 ]
 
 
-def _booking_slots_desc(booking: dict) -> str:
-    return "；".join(f"{lbl}：{booking.get(k) or '待收集'}" for k, lbl in _SLOT_LABELS)
+def _appointing_slots_desc(appointing: dict) -> str:
+    return "；".join(f"{lbl}：{appointing.get(k) or '待收集'}" for k, lbl in _SLOT_LABELS)
 
 
 def _format_entity_list(text: str, name_key: str, skip_keys: tuple = ()) -> str:
@@ -108,23 +108,23 @@ def _format_entity_list(text: str, name_key: str, skip_keys: tuple = ()) -> str:
     return "\n".join(lines)
 
 
-def _merge_slots(booking: dict, turn) -> dict:
+def _merge_slots(appointing: dict, turn) -> dict:
     for key, _ in _SLOT_LABELS:
         val = getattr(turn, key, None)
         if val:
-            booking[key] = val
-    return booking
+            appointing[key] = val
+    return appointing
 
 
-def _booking_ask(booking: dict, question: str) -> Command:
+def _appointing_ask(appointing: dict, question: str) -> Command:
     """追问并结束本轮，等待用户下一条消息（跨请求多轮，槽位随 state 持久化）。"""
     return Command(
         goto="__end__",
-        update={"messages": [AIMessage(content=question)], "rights_booking": booking},
+        update={"messages": [AIMessage(content=question)], "rights_appointing": appointing},
     )
 
 
-def _booking_finish(msg: str) -> Command:
+def _appointing_finish(msg: str) -> Command:
     """预约流程终态：回复用户并清空流程状态，返回 supervisor 收尾。"""
     return Command(
         goto="supervisor",
@@ -132,7 +132,7 @@ def _booking_finish(msg: str) -> Command:
             "messages": [AIMessage(content=msg)],
             "active_agent": None,
             "rights_answered": True,
-            "rights_booking": None,
+            "rights_appointing": None,
         },
     )
 
@@ -178,53 +178,53 @@ def _appoint_outcome(text: str | None) -> str:
     return "unknown"
 
 
-async def _booking_extract(state: ConsultState, booking: dict) -> BookingTurn:
+async def _appointing_extract(state: ConsultState, appointing: dict) -> AppointingTurn:
     """每轮抽取：槽位 + 意图（取消/继续/无关）。"""
     stage_desc = {
         "collect": "收集预约必填信息（姓名、手机号、预约日期、意向权益）",
         "wait_location": "权益与时间已核验，等待用户提供所在区域以推荐门店",
         "wait_store": "已推荐门店，等待用户选择预约哪家门店",
-    }.get(booking.get("stage"), "collect")
-    return await model.with_structured_output(BookingTurn).ainvoke([
-        SystemMessage(content=BOOKING_TURN_PROMPT.format(
+    }.get(appointing.get("stage"), "collect")
+    return await model.with_structured_output(AppointingTurn).ainvoke([
+        SystemMessage(content=APPOINTING_TURN_PROMPT.format(
             today=date.today().isoformat(),
-            slots=_booking_slots_desc(booking),
+            slots=_appointing_slots_desc(appointing),
             stage=stage_desc,
         )),
         *state["messages"],
     ])
 
 
-async def _booking_flow(state: ConsultState, booking: dict) -> Command | None:
+async def _appointing_flow(state: ConsultState, appointing: dict) -> Command | None:
     """预约流程状态机入口。返回 None 表示本轮与预约无关，回落到查询流程。"""
-    turn = await _booking_extract(state, booking)
+    turn = await _appointing_extract(state, appointing)
 
     if turn.intent == "cancel":
         print("=== rights Agent 预约流程：用户取消 ===")
-        return _booking_finish(BOOKING_CANCEL_MSG)
+        return _appointing_finish(APPOINTING_CANCEL_MSG)
     if turn.intent == "other":
         print("=== rights Agent 预约流程：本轮与预约无关，回落查询流程 ===")
         return None
 
-    booking = _merge_slots(dict(booking), turn)
-    stage = booking.get("stage", "collect")
+    appointing = _merge_slots(dict(appointing), turn)
+    stage = appointing.get("stage", "collect")
     if stage == "wait_store":
-        return await _booking_choose_store(state, booking)
+        return await _appointing_choose_store(state, appointing)
     if stage == "wait_location":
-        return await _booking_with_location(state, booking)
-    return await _booking_collect(state, booking, turn)
+        return await _appointing_with_location(state, appointing)
+    return await _appointing_collect(state, appointing, turn)
 
 
-async def _booking_collect(state: ConsultState, booking: dict, turn) -> Command:
+async def _appointing_collect(state: ConsultState, appointing: dict, turn) -> Command:
     """收集必填信息；齐备后查权益列表定 rightId，再调 valid_right 校验。"""
-    missing = [lbl for key, lbl in _SLOT_LABELS[:3] if not booking.get(key)]
+    missing = [lbl for key, lbl in _SLOT_LABELS[:3] if not appointing.get(key)]
     if missing:
         question = turn.next_question or f"请问您的{missing[0]}是？方便为您办理预约～"
-        return _booking_ask(booking, question)
+        return _appointing_ask(appointing, question)
 
     tools = await _get_tools_safe()
     if not tools:
-        return _booking_finish(BOOKING_SERVICE_DOWN_MSG)
+        return _appointing_finish(APPOINTING_SERVICE_DOWN_MSG)
 
     user_id = state.get("user_id")
     try:
@@ -232,12 +232,12 @@ async def _booking_collect(state: ConsultState, booking: dict, turn) -> Command:
     except (TypeError, ValueError):
         user_id = None
     if not user_id:
-        return _booking_finish("抱歉，办理预约需要先确认您的会员身份，当前未能获取您的账号信息，本次就先不为您预约啦，您可以重新登录后再试～")
+        return _appointing_finish("抱歉，办理预约需要先确认您的会员身份，当前未能获取您的账号信息，本次就先不为您预约啦，您可以重新登录后再试～")
 
     rights_text = await _call_mcp(tools, "get_right_list", {"userId": user_id})
     # 返回无权益条目特征(如 mock Server 仅回状态文本)时, 视为未查到, 委婉终止
     if not rights_text or ("rightId" not in rights_text and "{" not in rights_text and "[" not in rights_text):
-        return _booking_finish("很抱歉，暂时没能查到您的权益信息，本次先不为您预约啦，请稍后再试～")
+        return _appointing_finish("很抱歉，暂时没能查到您的权益信息，本次先不为您预约啦，请稍后再试～")
     print(f"=== rights Agent 预约流程：权益列表返回: {rights_text[:200]} ===")
 
     last_reply = next(
@@ -246,7 +246,7 @@ async def _booking_collect(state: ConsultState, booking: dict, turn) -> Command:
     )
     match = await model.with_structured_output(RightMatch).ainvoke([
         SystemMessage(content=RIGHT_MATCH_PROMPT.format(
-            desired=booking.get("desired_right") or "（用户未明确指定）",
+            desired=appointing.get("desired_right") or "（用户未明确指定）",
             last_reply=str(last_reply)[:200],
             rights=rights_text,
         )),
@@ -254,73 +254,73 @@ async def _booking_collect(state: ConsultState, booking: dict, turn) -> Command:
     right_id = getattr(match, "right_id", None)
     if not right_id:
         # 连续两次仍无法确定意向权益: 委婉终止, 避免反复重试同一问题
-        fails = booking.get("match_fails", 0) + 1
+        fails = appointing.get("match_fails", 0) + 1
         if fails >= 2:
             print("=== rights Agent 预约流程：多次无法确定意向权益，委婉终止 ===")
-            return _booking_finish("抱歉，几次都没能确定您想使用哪项权益，本次就先不为您预约啦～您可以先查一下自己名下的权益名称，再来找我办理，感谢理解！")
-        booking["match_fails"] = fails
+            return _appointing_finish("抱歉，几次都没能确定您想使用哪项权益，本次就先不为您预约啦～您可以先查一下自己名下的权益名称，再来找我办理，感谢理解！")
+        appointing["match_fails"] = fails
         # 无法唯一确定：列出权益请用户选择（回复序号或名称均可）
         rights_disp = _format_entity_list(rights_text, "rightName", skip_keys=("userId",))
-        return _booking_ask(booking, f"为您查到以下权益，请问您想使用哪一项呢？（直接回复序号或权益名称即可）\n{rights_disp}")
-    booking.pop("match_fails", None)
-    booking["right_id"] = right_id
+        return _appointing_ask(appointing, f"为您查到以下权益，请问您想使用哪一项呢？（直接回复序号或权益名称即可）\n{rights_disp}")
+    appointing.pop("match_fails", None)
+    appointing["right_id"] = right_id
     print(f"=== rights Agent 预约流程：匹配权益 rightId={right_id} ===")
 
     valid_text = await _call_mcp(tools, "valid_right", {"rightId": right_id})
     print(f"=== rights Agent 预约流程：valid_right 返回: {valid_text} ===")
     if not _valid_passed(valid_text):
-        return _booking_finish(BOOKING_VALID_FAIL_MSG)
+        return _appointing_finish(APPOINTING_VALID_FAIL_MSG)
 
-    if booking.get("location"):
-        return await _booking_with_location(state, booking, tools=tools)
-    booking["stage"] = "wait_location"
-    return _booking_ask(booking, "权益核验通过啦～请问您目前在哪个城市或区域呢？方便为您推荐附近可预约的门店。")
+    if appointing.get("location"):
+        return await _appointing_with_location(state, appointing, tools=tools)
+    appointing["stage"] = "wait_location"
+    return _appointing_ask(appointing, "权益核验通过啦～请问您目前在哪个城市或区域呢？方便为您推荐附近可预约的门店。")
 
 
-async def _booking_with_location(state: ConsultState, booking: dict, tools: list | None = None) -> Command:
+async def _appointing_with_location(state: ConsultState, appointing: dict, tools: list | None = None) -> Command:
     """有位置后查询门店列表，请用户选择。"""
-    if not booking.get("location"):
-        booking["stage"] = "wait_location"
-        return _booking_ask(booking, "请问您目前在哪个城市或区域呢？方便为您推荐附近可预约的门店。")
+    if not appointing.get("location"):
+        appointing["stage"] = "wait_location"
+        return _appointing_ask(appointing, "请问您目前在哪个城市或区域呢？方便为您推荐附近可预约的门店。")
     if tools is None:
         tools = await _get_tools_safe()
-    stores_text = await _call_mcp(tools, "get_nearby_stores", {"location": booking["location"]}) if tools else None
+    stores_text = await _call_mcp(tools, "get_nearby_stores", {"location": appointing["location"]}) if tools else None
     if not stores_text:
-        return _booking_finish(BOOKING_SERVICE_DOWN_MSG)
-    booking["stage"] = "wait_store"
+        return _appointing_finish(APPOINTING_SERVICE_DOWN_MSG)
+    appointing["stage"] = "wait_store"
     stores_disp = _format_entity_list(stores_text, "storeName")
-    return _booking_ask(booking, f"为您找到附近的可预约门店：\n{stores_disp}\n请问您想预约哪一家呢？")
+    return _appointing_ask(appointing, f"为您找到附近的可预约门店：\n{stores_disp}\n请问您想预约哪一家呢？")
 
 
-async def _booking_choose_store(state: ConsultState, booking: dict) -> Command:
+async def _appointing_choose_store(state: ConsultState, appointing: dict) -> Command:
     """用户已选门店，调用 appoint_service 下单。"""
-    if not booking.get("chosen_store"):
-        return _booking_ask(booking, "请问您想预约哪一家门店呢？")
-    if not booking.get("right_id"):
-        booking["stage"] = "collect"
-        return _booking_ask(booking, "预约信息好像有点缺失，请再告诉我您想使用哪项权益，我马上为您安排～")
+    if not appointing.get("chosen_store"):
+        return _appointing_ask(appointing, "请问您想预约哪一家门店呢？")
+    if not appointing.get("right_id"):
+        appointing["stage"] = "collect"
+        return _appointing_ask(appointing, "预约信息好像有点缺失，请再告诉我您想使用哪项权益，我马上为您安排～")
 
     tools = await _get_tools_safe()
     if not tools:
-        return _booking_finish(BOOKING_SERVICE_DOWN_MSG)
+        return _appointing_finish(APPOINTING_SERVICE_DOWN_MSG)
 
     result_text = await _call_mcp(tools, "appoint_service", {"req": {
-        "appointDatetime": booking.get("appoint_datetime"),
-        "mobile": booking.get("mobile"),
-        "rightId": booking.get("right_id"),
-        "userName": booking.get("user_name"),
+        "appointDatetime": appointing.get("appoint_datetime"),
+        "mobile": appointing.get("mobile"),
+        "rightId": appointing.get("right_id"),
+        "userName": appointing.get("user_name"),
     }})
     print(f"=== rights Agent 预约流程：appoint_service 返回: {result_text} ===")
 
     outcome = _appoint_outcome(result_text)
     if outcome == "fail":
-        return _booking_finish("很抱歉，刚才的预约没有办理成功，为避免出错本次就先不为您预约啦～您可以稍后再试，或联系客服协助处理，感谢理解！")
+        return _appointing_finish("很抱歉，刚才的预约没有办理成功，为避免出错本次就先不为您预约啦～您可以稍后再试，或联系客服协助处理，感谢理解！")
     if outcome == "success":
-        return _booking_finish(
-            f"预约办理成功啦～已为您预约「{booking.get('chosen_store')}」，"
-            f"日期 {booking.get('appoint_datetime')}，请保持手机畅通以接收确认通知，祝您就诊顺利！"
+        return _appointing_finish(
+            f"预约办理成功啦～已为您预约「{appointing.get('chosen_store')}」，"
+            f"日期 {appointing.get('appoint_datetime')}，请保持手机畅通以接收确认通知，祝您就诊顺利！"
         )
-    return _booking_finish("您的预约申请已提交，结果请以收到的短信/通知为准。如长时间未收到确认，可联系客服核实～")
+    return _appointing_finish("您的预约申请已提交，结果请以收到的短信/通知为准。如长时间未收到确认，可联系客服核实～")
 
 
 async def rights_agent_node(state: ConsultState) -> Command:
@@ -345,9 +345,9 @@ async def rights_agent_node(state: ConsultState) -> Command:
         )
 
     # 预约流程进行中: 优先走预约状态机(本轮与预约无关时自动回落查询流程)
-    booking = state.get("rights_booking")
-    if booking:
-        result = await _booking_flow(state, booking)
+    appointing = state.get("rights_appointing")
+    if appointing:
+        result = await _appointing_flow(state, appointing)
         if result is not None:
             return result
 
@@ -356,9 +356,9 @@ async def rights_agent_node(state: ConsultState) -> Command:
         SystemMessage(content=RIGHTS_INTENT_PROMPT),
         *state["messages"],
     ])
-    if intent and intent.intent == "booking":
+    if intent and intent.intent == "appointing":
         print("=== rights Agent 进入预约流程 ===")
-        result = await _booking_flow(state, {"stage": "collect"})
+        result = await _appointing_flow(state, {"stage": "collect"})
         if result is not None:
             return result
 

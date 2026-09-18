@@ -1,24 +1,3 @@
-"""
-MCP 客户端模块(基于 Nacos 服务发现 + SSE / Streamable HTTP 传输)
-
-完整链路(per-call 模式: 每次调用独立建连、用完即关,天然免疫连接失效):
-    1. 从 Nacos 拿到 SpringAI MCP Server 健康实例(healthyOnly=true)
-    2. 与实例建立 MCP 连接(SSE 优先,失败自动降级 Streamable HTTP): http://{ip}:{port}{MCP_SSE_PATH}
-    3. initialize -> listTools / callTool
-
-SpringAI MCP Server 暴露的工具(以 listTools 实际返回为准):
-    - queryWeather         查天气
-    - get_right_list       查用户权益
-    - get_nearby_stores    查附近门店
-
-对外入口:
-    - get_mcp_tools()       供 LangChain Agent 使用: Nacos -> 连接 -> LangChain 工具列表
-    - list_mcp_tools()      同步 listTools
-    - call_mcp_tool()       同步 callTool
-    - SseMcpClient          异步上下文管理器,一次性连接用法(自动做 Nacos 发现)
-    - discover_mcp_server() 仅做 Nacos 服务发现,返回健康实例
-"""
-
 import asyncio
 import json
 import os
@@ -210,7 +189,7 @@ def tool_result_text(result: Any) -> str:
     return "\n".join(parts) or str(result)
 
 
-# ==================== 三、SSE MCP 客户端(一次性连接用法) ====================
+# ==================== 三、SSE MCP 客户端 ====================
 
 async def _connect_session(url: str, headers: dict[str, str] | None = None) -> tuple[AsyncExitStack, ClientSession]:
     """
@@ -227,7 +206,7 @@ async def _connect_session(url: str, headers: dict[str, str] | None = None) -> t
             sse_client(url, headers=headers, timeout=MCP_TIMEOUT, sse_read_timeout=300.0)
         )
     except Exception as e:
-        sse_error = e  # 传统 SSE 端点不存在 / 握手失败,尝试 Streamable HTTP
+        sse_error = e
 
     if streams is None:
         try:

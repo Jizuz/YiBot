@@ -73,15 +73,15 @@ class TriageResult(BaseModel):
 class RightsIntent(BaseModel):
     """rights_agent 意图分流结果。"""
 
-    intent: Literal["query", "booking"] = Field(
+    intent: Literal["query", "appointing"] = Field(
         description=(
             "query：查询/了解类诉求（查我有什么权益、看有效期、问门店等）；"
-            "booking：使用/办理类诉求（我想用某项权益、帮我预约等）"
+            "appointing：使用/办理类诉求（我想用某项权益、帮我预约等）"
         )
     )
 
 
-class BookingTurn(BaseModel):
+class AppointingTurn(BaseModel):
     """权益预约流程：每轮从用户最新消息中抽取槽位与意图。"""
 
     intent: Literal["cancel", "continue", "other"] = Field(
