@@ -6,6 +6,7 @@ from langgraph.types import Command
 from agent.struct.consult_state import ConsultState
 from agent.struct.schemas import SupervisorDecision
 from agent.sub_agent.education_agent import education_agent_node
+from agent.sub_agent.rights_agent import rights_agent_node
 from agent.sub_agent.symptom_agent import symptom_agent_node
 from agent.sub_agent.triage_agent import triage_agent_node
 from llm.base_llm import chat_model
@@ -19,6 +20,7 @@ SUPERVISOR_PROMPT = """你是一个医疗问诊系统的调度主管。
 - triage_agent：分诊与紧急程度评估。当用户描述症状、询问该挂什么科时调用。
 - symptom_agent：结构化症状采集。当需要追问症状细节（部位、性质、持续时间）时调用。
 - education_agent：健康科普。当用户询问疾病知识、检查解读、生活注意事项时调用。
+- rights_agent：权益查询使用。当用户诉求查询权益、使用权益相关事项时调用。
 
 你的职责：
 1. 判断用户当前意图，选择最合适的子 Agent
@@ -44,6 +46,18 @@ async def supervisor_node(state: ConsultState) -> Command:
                 "pending_triage": False,       # 消费掉标记
                 "next_agent": "triage_agent",
                 "active_agent": "triage_agent",
+            },
+        )
+
+    # 硬路由：权益预约流程进行中(槽位未清空)，用户本轮回复大概率是流程输入(补信息/选门店/取消)，
+    # 无条件回 rights_agent；若本轮内容与预约无关，rights_agent 会自动回落到查询流程处理
+    if state.get("rights_booking"):
+        return Command(
+            goto="rights_agent",
+            update={
+                "next_agent": "rights_agent",
+                "active_agent": "rights_agent",
+                "agent_turn_count": 0,
             },
         )
 
@@ -93,6 +107,7 @@ def build_graph(checkpointer):
     g.add_node("triage_agent", triage_agent_node)
     g.add_node("symptom_agent", symptom_agent_node)
     g.add_node("education_agent", education_agent_node)
+    g.add_node("rights_agent", rights_agent_node)
     g.add_node("emergency_response", emergency_response_node)
     g.add_node("final_response", final_response_node)
 

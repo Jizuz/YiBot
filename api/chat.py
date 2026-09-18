@@ -1,5 +1,6 @@
 from typing import Optional
 from fastapi import APIRouter, Query, Request
+from langchain_core.messages import HumanMessage
 from pydantic import BaseModel
 
 from llm.simple_chat_model import get_ai_response
@@ -14,18 +15,27 @@ def common_chat(chats: str):
     return {"message": response}
 
 @router.get("/agent")
-async def common_ask_agent(question: str, session_id: str, request: Request):
+async def common_ask_agent(question: str, session_id: str, user_id: str, request: Request):
     """agent回答问题"""
     print('common_ask_agent start...')
 
     graph = request.app.state.graph
-    thread_id = f"user-{session_id}"
+    thread_id = f"user-{user_id}-{session_id}"
     config = {"configurable": {"thread_id": thread_id}}
+    # ConsultState.user_id 声明为 int(权益查询等子 Agent 直接使用); query 参数均为 str, 这里统一转换
+    uid = int(user_id) if user_id.isdigit() else user_id
     result = await graph.ainvoke(
-        {"messages": [{"role": "user", "content": question}], "session_id": session_id},
+        {"messages": [{"role": "user", "content": question}], "user_id": uid, "session_id": session_id},
         config=config,
     )
     last = result["messages"][-1]
+    # 防御: 若图被静默中断(如 goto 未注册节点), 最后一条仍是用户消息, 不能原样回显
+    if isinstance(last, HumanMessage) or not getattr(last, "content", None):
+        return {
+            "reply": "抱歉，刚才的处理似乎中断了，请重新发送您的问题。",
+            "need_emergency": result.get("need_emergency", False),
+            "active_agent": result.get("active_agent"),
+        }
     return {
         "reply": last.content,
         "need_emergency": result.get("need_emergency", False),
