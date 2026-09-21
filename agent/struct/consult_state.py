@@ -13,5 +13,7 @@ class ConsultState(TypedDict):
     agent_turn_count: int
     pending_triage: bool          # 症状采集完成后置 True
     symptom_summary: str | None   # 采集到的症状总结，供分诊使用
-    rights_answered: bool         # rights_agent 已给出回复(仅 rights_agent 读写, 用于拦截 supervisor 无新输入的重复路由)
-    rights_appointing: dict | None   # 权益预约流程槽位状态(仅 rights_agent 读写): stage/name/mobile/datetime/desired_right/location/chosen_store/right_id
+    # 分层记忆
+    global_summary: str | None   # Supervisor 全局汇总记忆: 主信箱超出滚动窗口的旧消息折叠而来(仅 supervisor 维护)
+    rights_memory: dict | None   # rights_agent 私有记忆(仅 rights_agent 读写, supervisor 只读 appointing 做硬路由):
+                                 # {summary: 历史折叠摘要, messages: 对话镜像, answered: 守卫标记, appointing: 预约槽位状态机}

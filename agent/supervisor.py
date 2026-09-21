@@ -1,9 +1,10 @@
-from langchain_core.messages import AIMessage, SystemMessage
+from langchain_core.messages import AIMessage, RemoveMessage, SystemMessage
 
 from langgraph.graph import StateGraph, START, END, MessagesState
 from langgraph.types import Command
 
 from agent.struct.consult_state import ConsultState
+from agent.struct.memory import WINDOW_ROUNDS, background_block, fold_messages, recent_rounds
 from agent.struct.schemas import SupervisorDecision
 from agent.sub_agent.education_agent import education_agent_node
 from agent.sub_agent.rights_agent import rights_agent_node
@@ -37,24 +38,49 @@ SUPERVISOR_PROMPT = """你是一个医疗问诊系统的调度主管。
 当前活跃子 Agent：{active_agent}
 """
 
+async def _maintain_global_memory(state: ConsultState) -> dict | None:
+    """全局汇总记忆维护: 主信箱超出滚动窗口(WINDOW_ROUNDS 轮)时, 把旧消息折叠进 global_summary。
+
+    任何一步失败都降级为本轮不折叠(旧消息暂留, 下轮再试), 不影响主流程。
+    """
+    msgs = state["messages"]
+    keep = recent_rounds(msgs, WINDOW_ROUNDS)
+    fold_part = msgs[: len(msgs) - len(keep)]
+    if not fold_part:
+        return None
+    if not all(getattr(m, "id", None) for m in fold_part):
+        return None  # 存在无 id 消息无法 Remove, 降级跳过
+    new_summary = await fold_messages(model, fold_part, state.get("global_summary"))
+    if new_summary is None:
+        print("警告：全局记忆折叠失败，本轮跳过")
+        return None
+    print(f"=== Supervisor 全局记忆折叠：{len(fold_part)} 条旧消息 -> global_summary（保留最近 {len(keep)} 条） ===")
+    return {"messages": [RemoveMessage(id=m.id) for m in fold_part], "global_summary": new_summary}
+
+
 async def supervisor_node(state: ConsultState) -> Command:
+    # 每轮最先执行: 维护全局汇总记忆(主信箱滚动窗口), 各返回路径统一 merge 该 update
+    mem_update = await _maintain_global_memory(state)
+
     # 硬路由：症状采集刚完成，强制去分诊
     if state.get("pending_triage"):
         return Command(
             goto="triage_agent",
             update={
+                **(mem_update or {}),
                 "pending_triage": False,       # 消费掉标记
                 "next_agent": "triage_agent",
                 "active_agent": "triage_agent",
             },
         )
 
-    # 硬路由：权益预约流程进行中(槽位未清空)，用户本轮回复大概率是流程输入(补信息/选门店/取消)，
+    # 硬路由：权益预约流程进行中(rights_memory.appointing 未清空)，用户本轮回复大概率是流程输入(补信息/选门店/取消)，
     # 无条件回 rights_agent；若本轮内容与预约无关，rights_agent 会自动回落到查询流程处理
-    if state.get("rights_appointing"):
+    if (state.get("rights_memory") or {}).get("appointing"):
         return Command(
             goto="rights_agent",
             update={
+                **(mem_update or {}),
                 "next_agent": "rights_agent",
                 "active_agent": "rights_agent",
                 "agent_turn_count": 0,
@@ -64,18 +90,22 @@ async def supervisor_node(state: ConsultState) -> Command:
     # 第一次进入时没有 active_agent
     active = state.get("active_agent", "无")
 
+    # 路由输入: 全局汇总记忆(背景) + 最近 WINDOW_ROUNDS 轮原始消息, 不再携带全量历史
     decision = await model.with_structured_output(SupervisorDecision).ainvoke([
-        SystemMessage(content=SUPERVISOR_PROMPT.format(active_agent=active)), *state["messages"],
+        SystemMessage(content=SUPERVISOR_PROMPT.format(active_agent=active)
+                      + background_block(state.get("global_summary"))),
+        *recent_rounds(state["messages"]),
     ])
     
     if decision.route == "FINISH":
         # 结束：由最终回复节点收尾
-        return Command(goto="final_response", update={"next_agent": None})
+        return Command(goto="final_response", update={**(mem_update or {}), "next_agent": None})
     
     # 路由到子 Agent，重置该 Agent 的轮次
     return Command(
         goto=decision.route,
         update={
+            **(mem_update or {}),
             "next_agent": decision.route,
             "active_agent": decision.route,
             "agent_turn_count": 0,
@@ -89,9 +119,11 @@ async def emergency_response_node(state: ConsultState) -> dict:
 
 
 async def final_response_node(state: ConsultState) -> dict:
+    # 收尾输入: 全局汇总记忆(背景) + 最近窗口轮次, 不再携带全量历史
     resp = await model.ainvoke([
-        SystemMessage(content="基于以上对话，给用户一个简洁的最终回复。"),
-        *state["messages"],
+        SystemMessage(content="基于以上对话，给用户一个简洁的最终回复。"
+                      + background_block(state.get("global_summary"))),
+        *recent_rounds(state["messages"]),
     ])
     return {"messages": [resp]}
 
