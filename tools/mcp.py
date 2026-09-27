@@ -40,6 +40,14 @@ MCP_TIMEOUT = float(os.getenv("MCP_TIMEOUT", "30"))
 TOOL_GET_WEATHER = "queryWeather"            # 查天气,参数: city
 TOOL_GET_RIGHT_LIST = "get_right_list"       # 查用户权益,参数: userId(int)
 TOOL_GET_NEARBY_STORES = "get_nearby_stores"  # 查附近门店,参数: location
+TOOL_SEARCH_KNOWLEDGE_BASE = "search_knowledge_base"  # 健康科普知识库检索,参数: query(education_agent 专用,可选)
+
+# search_knowledge_base 的工具描述(与 MCP Server 端注册保持一致)
+SEARCH_KB_TOOL_DESC = (
+    "健康科普知识库检索工具，仅用于健康科普助手场景。当用户咨询疾病、症状、饮食养生、就医建议等"
+    "健康科普问题时调用，从知识库检索权威科普片段作为回答依据。超出健康科普范围的问题不要调用本工具，"
+    "也不要编造知识库中没有的医学内容。"
+)
 
 
 def _patch_call_tool_result_for_springai() -> None:
@@ -381,6 +389,24 @@ async def get_mcp_tools() -> list[BaseTool]:
         )
     print(f"✅ MCP 连接成功,共加载 {len(lang_tools)} 个工具: {[t.name for t in tools]}")
     return lang_tools
+
+
+async def get_mcp_tool_by_name(tool_name: str) -> BaseTool | None:
+    """
+    按名称获取单个 MCP 工具(可选工具模式):
+    listTools 未暴露该工具 / 连接失败时返回 None,由调用方自行降级,不阻塞主流程。
+    实际描述/参数 schema 以服务端 listTools 下发为准。
+    """
+    try:
+        tools = await get_mcp_tools()
+    except Exception as e:
+        print(f"⚠️ 获取 MCP 工具列表失败(查找 {tool_name}): {e}")
+        return None
+    for tool in tools:
+        if tool.name == tool_name:
+            return tool
+    print(f"⚠️ MCP Server 未暴露工具 {tool_name}(可选工具,调用方将降级处理)")
+    return None
 
 
 # ==================== 五、同步便捷接口 ====================

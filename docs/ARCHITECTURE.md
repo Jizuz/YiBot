@@ -30,7 +30,7 @@ YiBot 是一个医疗场景的多 Agent 智能问诊平台,提供四类核心能
 |---|---|---|
 | 症状采集 | `symptom_agent` | 5 维度结构化追问(部位/性质/时长/频率/诱因),轮次受限 |
 | 智能分诊 | `triage_agent` | P0~P3 紧急度分级 + 科室推荐,红旗症状强制急救通道 |
-| 健康科普 | `education_agent` | 混合检索(RAG) + 基于资料回答,越界请求拒答 |
+| 健康科普 | `education_agent` | MCP 知识库检索(`search_knowledge_base`,可选优先) + 本地 RAG 降级 + 基于资料回答;未覆盖/涉及个人/越界 → 硬路由转症状采集→分诊 |
 | 权益服务 | `rights_agent` | MCP 工具查权益/门店 + 跨请求多轮预约状态机 |
 
 另有 `chit_chat_agent`(MCP 通用工具 Agent)与 `search_agent`(Tavily 联网搜索)为早期/备用节点,**当前未注册进主图**。
@@ -59,7 +59,7 @@ YiBot/
 │   └── sub_agent/
 │       ├── triage_agent.py     # 分诊:关键词前置规则 + LLM 分级
 │       ├── symptom_agent.py    # 症状采集:多轮追问 + 轮次硬上限
-│       ├── education_agent.py  # 科普:正则越界拦截 + RAG
+│       ├── education_agent.py  # 科普:正则越界拦截 + MCP 知识库检索(优先) + RAG 降级
 │       ├── rights_agent.py     # 权益:私有记忆 + 预约状态机 + MCP
 │       ├── chit_chat_agent.py  # (未挂载)
 │       └── search_agent.py     # (未挂载)
@@ -121,6 +121,7 @@ YiBot/
 │                           └──► final_response ──────► END     │
 │                                                              │
 │  硬路由(优先于 LLM 路由):                                    │
+│   · pending_symptom_collect  → 强制 symptom_agent             │
 │   · pending_triage=True        → 强制 triage_agent            │
 │   · rights_memory.appointing   → 强制 rights_agent            │
 └──────────────────────────────────────────────────────────────┘
@@ -128,7 +129,7 @@ YiBot/
 ┌──────▼─────────────┬──────────────┬─────────────┐
 │ MCP Server(SpringAI)│  RAG 检索     │  Tavily     │
 │ Nacos→SSE per-call  │ Chroma+BM25  │ (备用Agent) │
-│ get_right_list 等   │ education用   │             │
+│ get_right_list 等   │ education降级用 │             │
 └────────────────────┴──────────────┴─────────────┘
 ```
 
@@ -190,7 +191,7 @@ SystemMessage: SUPERVISOR_PROMPT(含当前 active_agent)
 Human/AI ×N : recent_rounds(messages, 15)         ← 最近 15 轮原始消息
 ```
 
-输出 schema(`SupervisorDecision`):`route ∈ {triage_agent, symptom_agent, education_agent, rights_agent, FINISH}` + `reason`(用于日志)。路由 prompt 内嵌协作规则:信息足够分诊直接 triage、信息模糊先 symptom、采集完成后通常再 triage、无后续则 FINISH、主管不得直接回答医学问题。
+输出 schema(`SupervisorDecision`):`route ∈ {triage_agent, symptom_agent, education_agent, rights_agent, FINISH}` + `reason`(用于日志)。路由 prompt 内嵌协作规则:信息足够分诊直接 triage、信息模糊先 symptom、采集完成后通常再 triage、education 科普未覆盖/涉及个人/越界时转 symptom 采集、采集进行中不中途改路、无后续则 FINISH、主管不得直接回答医学问题。
 
 ### 3.4 硬路由:状态标记优先于 LLM 判断
 
@@ -342,9 +343,11 @@ OUT_OF_SCOPE_PATTERNS = [
 ]
 ```
 
-- **第一层(正则)**:命中即不检索不生成,直接返回"涉及个人医疗建议,请咨询医生或分诊";
-- **第二层(LLM)**:生成结果的 `out_of_scope` 字段为真时同样拒答——防止正则漏网;
-- 回答强制基于 RAG 检索资料(检索为空时提示谨慎回答),尾部附"不能替代医生诊断"免责声明与来源列表。
+- **第一层(正则)**:命中即不检索不生成,置 `pending_symptom_collect` 经 supervisor 硬路由转症状采集→分诊链路;
+- **第二层(LLM)**:生成结果的 `out_of_scope` 字段为真时同样转采集链路——防止正则漏网;
+- **检索未覆盖**:MCP 与本地 RAG 两路均无结果时,不让 LLM 凭空生成,直接转采集链路;
+- **涉及个人情况**:`needs_medical_attention` 为真时先输出科普回答 + 就医提示,再转采集链路;
+- 回答强制基于检索资料,尾部附"不能替代医生诊断"免责声明与来源列表。
 
 ### 5.3 权益流程安全(rights_agent)
 
@@ -455,7 +458,7 @@ rights_agent 的所有 LLM 调用(意图分流取镜像尾 6 条、槽位抽取�
 | `messages` | 读写(折叠+窗口读) | 读 | 读写 | 读 | 读写(经镜像+双写) | 只取末条 |
 | `global_summary` | **读写** | - | - | - | 读 | - |
 | `rights_memory` | 只读 `appointing` | - | - | - | **读写** | - |
-| `symptom_summary`/`pending_triage` | 读写(消费标记) | 读 | 写 | - | - | - |
+| `symptom_summary`/`pending_triage`/`pending_symptom_collect` | 读写(消费标记) | 读 | 写 | 写(`pending_symptom_collect`) | - | - |
 
 ### 6.5 长会话下的信息流(示例)
 
@@ -484,13 +487,13 @@ Nacos 服务发现(v1/v2 兼容,鉴权 token,健康实例过滤,多实例随机�
 - **per-call 建连模式**:`get_mcp_tools` 中连接用完即关;工具实际执行时各自独立建连——无长连接保活负担,代价是每次调用多一次握手;
 - **SpringAI 兼容 patch**:SpringAI MCP Server 会把 List 结果直接放进 `structuredContent`(规范要求 object),启动时 monkeypatch 放宽该字段类型为 `Any`,否则 callTool 解析报错但服务端实际已执行;
 - 工具获取失败返回空列表(主流程不崩),rights 侧再包 15s `wait_for` 超时;
-- 当前使用的远端工具:`get_right_list`(查权益)、`get_nearby_stores`(附近门店)、`valid_right`(权益校验)、`appoint_service`(预约下单)、`queryWeather`(天气)。
+- 当前使用的远端工具:`get_right_list`(查权益)、`get_nearby_stores`(附近门店)、`valid_right`(权益校验)、`appoint_service`(预约下单)、`queryWeather`(天气)、`search_knowledge_base`(健康科普知识库检索,`education_agent` 专用可选工具,未暴露时降级本地 RAG)。
 
 ### 7.2 RAG 检索(`rag/core/hybird.py`)
 
 - Chroma 向量召回(通义 `text-embedding-v3`,collection `rag_knowledge`)权重 0.6 + BM25 关键词召回(jieba 分词,k=5)权重 0.4,`EnsembleRetriever` 融合;
 - 结果硬截断 top-5 防 prompt 爆 token;检索为空时格式化为"未检索到资料,谨慎回答"提示;
-- 仅 `education_agent` 使用;向量库数据经 `manager/rag_manager` + `api/rag.py` 管理(文件/网页加载器在 `rag/loader/`)。
+- 仅 `education_agent` 使用,定位为其**降级检索通道**(MCP `search_knowledge_base` 不可用时兜底);向量库数据经 `manager/rag_manager` + `api/rag.py` 管理(文件/网页加载器在 `rag/loader/`)。
 
 ### 7.3 其他工具
 
@@ -525,7 +528,7 @@ Nacos 服务发现(v1/v2 兼容,鉴权 token,健康实例过滤,多实例随机�
 ### 9.1 已知限制
 
 1. **`api/chat.py` 未设置外层 `recursion_limit`**:LangGraph 默认上限极高,极端路由循环靠 rights 守卫兜底,但仍建议显式 `config={"recursion_limit": 50}` 快速失败;
-2. **symptom_agent 采集完成判定弱**:`should_continue_collecting` 的 `decision` 字段当前未参与分支判断(代码以对象真值分支),采集收敛实际依赖 3 轮硬上限;
+2. ~~**symptom_agent 采集完成判定弱**~~ 已修复:`should_continue_collecting` 调用缺 `turn_count` 参数(必然 TypeError 走降级)与 `decision` 字段未参与分支判断两个问题已修复,采集收敛不再单纯依赖 3 轮硬上限;
 3. **MCP 四层超时未统一**:Nacos/连接/listTools/callTool 各自为政,rights 侧的 `wait_for` 15s 属临时补丁;
 4. **模糊预约表述路由召回不足**:supervisor 职责描述未覆盖"我想预约一下洁牙"这类模糊表述,可能被路由到 symptom_agent(职责描述扩充待拍板);
 5. **chit_chat / search_agent 未挂载**;`agent/checkpointer.py` 为空文件;

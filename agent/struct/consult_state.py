@@ -12,6 +12,7 @@ class ConsultState(TypedDict):
     active_agent: str | None      # 当前活跃的子 Agent
     agent_turn_count: int
     pending_triage: bool          # 症状采集完成后置 True
+    pending_symptom_collect: bool # education_agent 判定需转症状采集(检索未覆盖/涉及个人情况/越界)时置 True(supervisor 硬路由消费)
     symptom_summary: str | None   # 采集到的症状总结，供分诊使用
     # 分层记忆
     global_summary: str | None   # Supervisor 全局汇总记忆: 主信箱超出滚动窗口的旧消息折叠而来(仅 supervisor 维护)

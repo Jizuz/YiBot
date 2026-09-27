@@ -34,6 +34,8 @@ SUPERVISOR_PROMPT = """你是一个医疗问诊系统的调度主管。
 - 如果用户描述的信息已经足够分诊，直接调用 triage_agent
 - 如果信息模糊、需要追问细节，先调用 symptom_agent
 - symptom_agent 采集完成后，通常需要再调用 triage_agent 给出分诊结论
+- education_agent 科普无法覆盖、涉及个人情况或越界时，会转入 symptom_agent 采集症状后再 triage_agent 分诊
+- 若 symptom_agent 正在采集（用户消息是在回答症状追问），继续调用 symptom_agent 直到采集完成，不要中途改路
 
 当前活跃子 Agent：{active_agent}
 """
@@ -61,6 +63,20 @@ async def _maintain_global_memory(state: ConsultState) -> dict | None:
 async def supervisor_node(state: ConsultState) -> Command:
     # 每轮最先执行: 维护全局汇总记忆(主信箱滚动窗口), 各返回路径统一 merge 该 update
     mem_update = await _maintain_global_memory(state)
+
+    # 硬路由：education_agent 判定无法以科普满足(检索未覆盖/涉及个人情况/越界)，强制进入症状采集
+    # (采集完成后由下方 pending_triage 硬路由接续分诊, 形成采集 -> 分诊完整链路)
+    if state.get("pending_symptom_collect"):
+        return Command(
+            goto="symptom_agent",
+            update={
+                **(mem_update or {}),
+                "pending_symptom_collect": False,   # 消费掉标记
+                "next_agent": "symptom_agent",
+                "active_agent": "symptom_agent",
+                "agent_turn_count": 0,
+            },
+        )
 
     # 硬路由：症状采集刚完成，强制去分诊
     if state.get("pending_triage"):

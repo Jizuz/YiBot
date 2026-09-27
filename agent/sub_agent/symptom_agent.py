@@ -52,7 +52,7 @@ async def symptom_agent_node(state: ConsultState) -> Command:
 
     try:
         # 判断是否还需要继续追问（可以用 LLM 判断，也可以用规则）
-        need_more = await should_continue_collecting(state, resp)
+        need_more = await should_continue_collecting(state, resp, turn)
     except Exception:
         # 降级：达到轮数上限就总结，否则问一个通用问题
         if turn >= 2:
@@ -64,7 +64,7 @@ async def symptom_agent_node(state: ConsultState) -> Command:
                 reason="fallback",
             )
 
-    if need_more:
+    if need_more and getattr(need_more, "decision", "continue") == "continue":
         # 追问：把问题发给用户，等待下一轮输入
         # 注意：这里不返回 Supervisor，而是直接结束当前轮，等待用户回复
         return Command(
