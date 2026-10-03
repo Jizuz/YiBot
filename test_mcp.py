@@ -62,6 +62,7 @@ def test_sync_helpers():
         print("✅ call_mcp_tool:", call_mcp_tool(TOOL_GET_WEATHER, {"city": "北京"}))
 
 
+
 if __name__ == "__main__":
     try:
         asyncio.run(test_sse_list_and_call())
