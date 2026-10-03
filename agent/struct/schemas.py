@@ -113,6 +113,29 @@ class RightMatch(BaseModel):
     )
 
 
+class KBSearchPlan(BaseModel):
+    """知识库检索分组决策: education_agent 调 search_knowledge_base 前,由大模型分析用户请求获得。"""
+
+    doc_group: Literal[
+        "cardio_health",
+        "resp_health",
+        "ped_health",
+        "endo_health",
+        "women_health",
+        "common_living",
+        "unknown",
+    ] = Field(
+        description=(
+            "用户问题所属的健康知识分组(对应 search_knowledge_base 的 docGroup 过滤参数): "
+            "cardio_health=心血管、resp_health=呼吸、ped_health=儿童健康、endo_health=内分泌、"
+            "women_health=女性健康、common_living=通用居家健康; "
+            "无法判断或跨分组时选 unknown(检索时不过滤分组)"
+        ),
+    )
+
+    reason: str = Field(description="分组判断理由，用于日志和调试")
+
+
 class EducationResult(BaseModel):
     """科普回答结果。"""
     

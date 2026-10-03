@@ -30,7 +30,7 @@ YiBot 是一个医疗场景的多 Agent 智能问诊平台,提供四类核心能
 |---|---|---|
 | 症状采集 | `symptom_agent` | 5 维度结构化追问(部位/性质/时长/频率/诱因),轮次受限 |
 | 智能分诊 | `triage_agent` | P0~P3 紧急度分级 + 科室推荐,红旗症状强制急救通道 |
-| 健康科普 | `education_agent` | MCP 知识库检索(`search_knowledge_base`,可选优先) + 本地 RAG 降级 + 基于资料回答;未覆盖/涉及个人/越界 → 硬路由转症状采集→分诊 |
+| 健康科普 | `education_agent` | MCP 知识库检索(`search_knowledge_base`,可选优先,大模型分析用户请求得出 `docGroup` 分组过滤) + 本地 RAG 降级 + 基于资料回答;未覆盖/涉及个人/越界 → 硬路由转症状采集→分诊 |
 | 权益服务 | `rights_agent` | MCP 工具查权益/门店 + 跨请求多轮预约状态机 |
 
 另有 `chit_chat_agent`(MCP 通用工具 Agent)与 `search_agent`(Tavily 联网搜索)为早期/备用节点,**当前未注册进主图**。
@@ -345,6 +345,7 @@ OUT_OF_SCOPE_PATTERNS = [
 
 - **第一层(正则)**:命中即不检索不生成,置 `pending_symptom_collect` 经 supervisor 硬路由转症状采集→分诊链路;
 - **第二层(LLM)**:生成结果的 `out_of_scope` 字段为真时同样转采集链路——防止正则漏网;
+- **分组过滤**:MCP 检索前由大模型分析用户请求得出知识库分组(`KBSearchPlan.doc_group` → `docGroup` 参数),入组仅限服务端枚举值(cardio_health=心血管/resp_health=呼吸/ped_health=儿童健康/endo_health=内分泌/women_health=女性健康/common_living=通用居家健康),不确定/跨分组/分析失败/非法值一律不传分组检索全部;分组过滤后无命中自动退回全分组重检一次,防分组过窄漏检;
 - **检索未覆盖**:MCP 与本地 RAG 两路均无结果时,不让 LLM 凭空生成,直接转采集链路;
 - **涉及个人情况**:`needs_medical_attention` 为真时先输出科普回答 + 就医提示,再转采集链路;
 - 回答强制基于检索资料,尾部附"不能替代医生诊断"免责声明与来源列表。
@@ -487,13 +488,13 @@ Nacos 服务发现(v1/v2 兼容,鉴权 token,健康实例过滤,多实例随机�
 - **per-call 建连模式**:`get_mcp_tools` 中连接用完即关;工具实际执行时各自独立建连——无长连接保活负担,代价是每次调用多一次握手;
 - **SpringAI 兼容 patch**:SpringAI MCP Server 会把 List 结果直接放进 `structuredContent`(规范要求 object),启动时 monkeypatch 放宽该字段类型为 `Any`,否则 callTool 解析报错但服务端实际已执行;
 - 工具获取失败返回空列表(主流程不崩),rights 侧再包 15s `wait_for` 超时;
-- 当前使用的远端工具:`get_right_list`(查权益)、`get_nearby_stores`(附近门店)、`valid_right`(权益校验)、`appoint_service`(预约下单)、`queryWeather`(天气)、`search_knowledge_base`(健康科普知识库检索,`education_agent` 专用可选工具,未暴露时降级本地 RAG)。
+- 当前使用的远端工具:`get_right_list`(查权益)、`get_nearby_stores`(附近门店)、`valid_right`(权益校验)、`appoint_service`(预约下单)、`queryWeather`(天气)、`search_knowledge_base`(健康科普知识库检索,参数 `query`+`topK`+`docGroup` 可选分组过滤,`education_agent` 专用可选工具,未暴露时降级本地 RAG)。
 
 ### 7.2 RAG 检索(`rag/core/hybird.py`)
 
 - Chroma 向量召回(通义 `text-embedding-v3`,collection `rag_knowledge`)权重 0.6 + BM25 关键词召回(jieba 分词,k=5)权重 0.4,`EnsembleRetriever` 融合;
 - 结果硬截断 top-5 防 prompt 爆 token;检索为空时格式化为"未检索到资料,谨慎回答"提示;
-- 仅 `education_agent` 使用,定位为其**降级检索通道**(MCP `search_knowledge_base` 不可用时兜底);向量库数据经 `manager/rag_manager` + `api/rag.py` 管理(文件/网页加载器在 `rag/loader/`)。
+- 仅 `education_agent` 使用,定位为其**降级检索通道**(MCP `search_knowledge_base` 不可用时兜底,不支持分组过滤);向量库数据经 `manager/rag_manager` + `api/rag.py` 管理(文件/网页加载器在 `rag/loader/`)。
 
 ### 7.3 其他工具
 
