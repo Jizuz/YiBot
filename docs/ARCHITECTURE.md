@@ -1,560 +1,446 @@
-# YiBot 技术架构文档
+# YiBot 平台技术架构文档
 
-> 基于 LangGraph 的多 Agent 医疗问诊与权益服务平台
-> 核心关键词:分层编排、多轮对话、规则安全、分层记忆
-> 文档基线:2026-09-19(S1 全局记忆 + S2 rights 私有记忆已合入)
+> 医疗场景多 Agent 智能问诊平台 —— 三端协同架构
+> **Chatte 前端（React）· YiBot 后端（FastAPI + LangGraph）· MCP Tool Server（Spring AI）**
+> 文档基线：2026-10-07（S1 全局记忆 + S2 rights 私有记忆已合入；知识库权威源管道已上线）
 
 ---
 
 ## 目录
 
-1. [项目概览](#1-项目概览)
-2. [总体架构](#2-总体架构)
-3. [分层编排](#3-分层编排)
-4. [多轮对话机制](#4-多轮对话机制)
-5. [规则与安全机制](#5-规则与安全机制)
-6. [分层记忆架构](#6-分层记忆架构)
-7. [工具调用层](#7-工具调用层)
-8. [会话与持久化](#8-会话与持久化)
-9. [已知限制与演进方向](#9-已知限制与演进方向)
+1. [平台总览](#1-平台总览)
+2. [YiBot 后端：多 Agent 编排核心](#2-yibot-后端多-agent-编排核心)
+3. [Chatte 前端](#3-chatte-前端)
+4. [MCP Tool Server（Java）](#4-mcp-tool-serverjava)
+5. [核心数据流](#5-核心数据流)
+6. [核心亮点](#6-核心亮点)
+7. [已知限制与风险](#7-已知限制与风险)
+8. [未来探索方向](#8-未来探索方向)
+9. [部署与配置](#9-部署与配置)
 
 ---
 
-## 1. 项目概览
+## 1. 平台总览
 
-### 1.1 定位
+### 1.1 系统拓扑
 
-YiBot 是一个医疗场景的多 Agent 智能问诊平台,提供四类核心能力:
+```
+                        ┌─────────────────────────────┐
+                        │      Chatte 前端 :5173       │
+                        │  React 19 + TS + Vite 8      │
+                        │  聊天 / 会话管理 / 登录       │
+                        │  知识库文档管理页(Admin)      │
+                        └──────┬───────────────┬──────┘
+              /chat/* /user/*  │               │  /rag/admin/doc/*
+              (JSON, SSE 预留) │               │  (JSON, Vite 代理)
+                               ▼               ▼
+        ┌──────────────────────────────┐   ┌───────────────────────────────┐
+        │      YiBot 后端 :8000        │   │   MCP Tool Server :8090 (Java) │
+        │  FastAPI + LangGraph 编排    │   │  Spring Boot + Spring AI MCP   │
+        │  Supervisor + 4 子 Agent     │   │  ┌─ MCP 工具(权益/门店/天气/KB) │
+        │  分层记忆 / 双层安全 / 状态机  │   │  ├─ 知识库权威源管道           │
+        └───────┬──────────────┬───────┘   │  │  (kb_doc → MQ → 双索引)     │
+                │              │           │  └─ 文档管理后台 REST           │
+     ┌──────────┘              │  MCP 调用  └───┬────────────┬─────────────┘
+     │ LangGraph Checkpointer  │  (SSE→Streamable│            │
+     ▼                         ▼  HTTP, per-call)│            │
+┌─────────┐  ┌───────┐   ┌─────────┐       ┌────▼────┐  ┌────▼─────┐  ┌──────────┐
+│ MySQL   │  │ Redis │   │ Nacos   │       │ RocketMQ│  │ Qdrant   │  │ DashScope│
+│ :3306   │  │ :6379 │   │ :8848   │       │ :8081   │  │ :6333    │  │ GLM/向量  │
+│ chatte  │  │ 会话   │   │ 服务发现 │       │ proxy   │  │ 向量库    │  │ API      │
+│ 库      │  │ 缓存   │   │         │       │ 文档事件 │  │ 1024维    │  │          │
+└─────────┘  └───────┘   └─────────┘       └─────────┘  └──────────┘  └──────────┘
+     ▲                                                        ▲
+     └────────────── kb_doc 权威源表（两服务共用 chatte 库）──────┘
+```
 
-| 能力 | 承载 Agent | 说明 |
+### 1.2 三端职责
+
+| 端 | 技术栈 | 职责 |
 |---|---|---|
-| 症状采集 | `symptom_agent` | 5 维度结构化追问(部位/性质/时长/频率/诱因),轮次受限 |
-| 智能分诊 | `triage_agent` | P0~P3 紧急度分级 + 科室推荐,红旗症状强制急救通道 |
-| 健康科普 | `education_agent` | MCP 知识库检索(`search_knowledge_base`,可选优先,大模型分析用户请求得出 `docGroup` 分组过滤) + 本地 RAG 降级 + 基于资料回答;未覆盖/涉及个人/越界 → 硬路由转症状采集→分诊 |
-| 权益服务 | `rights_agent` | MCP 工具查权益/门店 + 跨请求多轮预约状态机 |
+| **Chatte 前端** | React 19 / TypeScript / Vite 8 / react-router 7 | 问诊对话交互、会话列表/回放、登录（手机号+密码，登录即注册）、知识库文档管理界面（Admin 页直连 MCP Server） |
+| **YiBot 后端** | Python 3.13 / FastAPI / LangGraph / LangChain / GLM-4.7 | 多 Agent 编排核心：意图路由、症状采集、分诊、科普（调 MCP 检索）、权益预约状态机；图状态持久化、业务会话管理 |
+| **MCP Tool Server** | Java / Spring Boot / Spring AI MCP / langchain4j / RocketMQ 5 / Qdrant | 对外暴露 6 个 MCP 工具（权益/门店/天气/知识库检索）；知识库权威源管道（文档 → MQ → 向量+BM25 双索引）；文档管理后台 |
 
-另有 `chit_chat_agent`(MCP 通用工具 Agent)与 `search_agent`(Tavily 联网搜索)为早期/备用节点,**当前未注册进主图**。
+### 1.3 基础设施依赖
 
-### 1.2 技术栈
+| 组件 | 端口 | 用途 |
+|---|---|---|
+| MySQL 8（`chatte` 库） | 3306 | `user` / `session` / `session_message`（YiBot）；`kb_doc` 权威源 + `checkpoints`（LangGraph） |
+| Redis | 6379 | 会话元数据/消息缓存（15min 滑动过期） |
+| Nacos | 8848 | MCP Server 服务发现（健康实例过滤、多实例负载） |
+| RocketMQ 5 (gRPC Proxy) | 8081 | 知识库文档变更事件（topic：`doc_chunk_vector_topic`，tag 区分事件类型） |
+| Qdrant | 6333 | 向量库（collection：`doc_rag_collection`，1024 维） |
+| DashScope | — | 对话 GLM-4.7（OpenAI 兼容）+ 向量 `text-embedding-v3`（两服务各自接入） |
 
-- **编排**:LangGraph(`StateGraph` + `Command` 动态路由)+ LangChain(`create_agent` ReAct)
-- **LLM**:GLM-4.7(OpenAI 兼容协议接入,`temperature=0.7`),全程 `with_structured_output` 结构化决策
-- **Web**:FastAPI(lifespan 内构建图,单例常驻)
-- **存储**:MySQL(会话/消息表 + LangGraph `AIOMySQLSaver` Checkpointer)、Redis(会话缓存)、Chroma(向量库)
-- **检索**:Chroma 向量召回 + BM25(jieba 分词)Ensemble 混合
-- **工具**:MCP(Nacos 服务发现 + SSE)、Tavily、本地 mock 工具
 
-### 1.3 目录结构
+---
+
+## 2. YiBot 后端：多 Agent 编排核心
+
+### 2.1 编排图（LangGraph StateGraph）
 
 ```
-YiBot/
-├── main.py                  # FastAPI 入口,lifespan 构建 graph(单例)
-├── agent/
-│   ├── supervisor.py        # 主管:路由决策 + 硬路由 + 全局记忆折叠 + 图构建
-│   ├── checkpointer.py      # (空文件,保留位)
-│   ├── struct/
-│   │   ├── consult_state.py # ConsultState 全局状态定义(TypedDict)
-│   │   ├── schemas.py       # 7 个 Pydantic 结构化输出 Schema
-│   │   └── memory.py        # 分层记忆工具(滚动窗口/折叠摘要/背景拼装)
-│   └── sub_agent/
-│       ├── triage_agent.py     # 分诊:关键词前置规则 + LLM 分级
-│       ├── symptom_agent.py    # 症状采集:多轮追问 + 轮次硬上限
-│       ├── education_agent.py  # 科普:正则越界拦截 + MCP 知识库检索(优先) + RAG 降级
-│       ├── rights_agent.py     # 权益:私有记忆 + 预约状态机 + MCP
-│       ├── chit_chat_agent.py  # (未挂载)
-│       └── search_agent.py     # (未挂载)
-├── api/
-│   ├── chat.py              # /chat/agent 图入口 + 会话历史接口
-│   ├── user.py              # 用户 CRUD
-│   └── rag.py               # 知识库管理
-├── llm/
-│   ├── base_llm.py          # ChatOpenAI(GLM)工厂
-│   ├── simple_chat_model.py # 简单单轮聊天
-│   └── simple_agent.py      # 简单 ReAct Agent(调试用)
-├── manager/
-│   ├── session_manager.py   # Redis 会话缓存 + MySQL 异步落库
-│   └── rag_manager.py       # 知识库入库管理
-├── rag/
-│   ├── chroma/              # Chroma 客户端 + 元数据
-│   ├── core/hybird.py       # 混合检索器(Chroma 0.6 + BM25 0.4)
-│   └── loader/              # 文件/网页加载
-├── tools/
-│   ├── mcp.py               # Nacos 发现 + SSE 连接 + 工具包装(per-call)
-│   ├── mcp_tool.py          # 本地 FastMCP Server(高德天气,stdio)
-│   ├── custom_tools.py      # 本地 mock 工具 + 工具错误中间件
-│   └── tavily.py            # 联网搜索/网页提取
-├── database/                # MySQL 连接、ORM、Repository
-└── schemas/                 # 通用请求/响应 Schema
+                          ┌────────────┐
+                 user ──▶ │ supervisor │ LLM 结构化路由 + 关键词前置保证
+                          └─────┬──────┘
+        ┌───────────┬───────────┼───────────┬───────────────┐
+        ▼           ▼           ▼           ▼               ▼
+  ┌──────────┐ ┌─────────┐ ┌─────────┐ ┌───────────┐ ┌────────────┐
+  │ symptom  │ │ triage  │ │education│ │  rights   │ │ chit_chat / │
+  │ 症状采集  │ │ 分级分诊 │ │ 健康科普 │ │ 权益预约   │ │ search(未挂)│
+  │ 多轮追问  │ │ P0~P3   │ │ MCP检索 │ │ 7阶段状态机│ │            │
+  └────┬─────┘ └────┬────┘ └────┬────┘ └─────┬─────┘ └────────────┘
+       └────────────┴─────┬────┴─────────────┘
+                           ▼
+                  ┌─────────────────┐
+                  │ safety_guardian │ 最后一道防线（幻觉术语纠偏/紧急话术兜底）
+                  └─────────────────┘
+```
+
+- **Supervisor 硬路由保证**（`agent/supervisor.py`）：关键词命中（急症/预约/科普等）直接指定 `next_agent`，LLM 仅在模糊意图时结构化决策——纯模型路由的漏判率被工程手段兜住。
+- **双层安全**（`agent/struct/safety.py`）：正则黑名单/急症关键词前置拦截（快、确定）+ LLM 结构化判定兜底（慢、泛化），`need_emergency` 贯穿全图，任何节点可触发紧急话术。
+- **分层记忆**（`agent/struct/memory.py`）：
+  - S1 全局：15 轮滑窗 + 超窗折叠为摘要，防止长会话 token 爆炸；
+  - S2 私有：`rights_memory` 镜像用户权益（列表/校验/锁定），跨轮预约流程中权益信息不丢失、不重复查询。
+- **跨请求 7 阶段预约状态机**（`agent/sub_agent/rights_agent.py` + checkpointer）：
+  `selecting_right → confirming_right → choosing_store → filling_info → submitting → submitted → appointing_success`，每阶段用户确认后推进，非法跳转被拒；下单成功进入 `submitted` 后跨请求等待机构确认。
+
+### 2.2 类型与契约
+
+- **8 个 Pydantic Schema**（`agent/struct/schemas.py`）：`AgentDecision` / `EmergencyCheck` / `SymptomSummary` / `TriageResult` / `EducationDraft` / `AppointmentInfo` / `ChatResponse` / `SessionBrief`——所有 LLM 输出走结构化解析，解析失败自动降级纯文本，接口层永不裸奔。
+
+### 2.3 双链路会话持久化
+
+```
+LangGraph 图执行 ──▶ AIOMySQLSaver(checkpoints 表)   # 图状态/记忆/预约阶段，跨请求恢复
+       │
+       └──────▶ Redis 15min 滑动缓存（manager/session_manager.py）
+                     └──▶ 异步批量落 MySQL(session / session_message)  # 业务侧会话列表/消息回放
+```
+
+两条链路解耦：图恢复不依赖业务表；业务回放不解析图状态。前端会话列表/历史接口（`/chat/session/*`）读业务链路。
+
+### 2.4 MCP 客户端（`tools/mcp.py`）
+
+- Nacos 按 `groupName/serviceName` 拉取**健康实例**列表，随机负载；
+- 传输协商：优先 SSE（`/sse`），失败自动降级 Streamable HTTP（同一 URL），覆盖 Spring AI MCP Server 的 `STREAMABLE` 协议；
+- **per-call 会话**：每次工具调用独立建立 MCP 会话用后即弃，无长连接状态，规避 keep-alive 断连与并发复用问题；
+- 含 SpringAI 兼容 monkeypatch（新版 spring-ai SSE 注释格式对齐）；
+- 本地兜底：`tools/mcp_tool.py`（FastMCP 天气工具）在 Nacos 不可用时以 stdio 起本地工具，开发环境零依赖。
+
+
+---
+
+## 3. Chatte 前端
+
+> 独立仓库部署：`/Users/jizuz/WorkSpace/FRONT/Chatte`（本仓库 YiBot 仅后端）
+
+### 3.1 技术栈与结构
+
+React 19 + TypeScript + Vite 8 + react-router-dom 7 + lucide-react（图标），oxlint 检查。无状态管理库、无 UI 组件库——约 1500 行核心代码，全部 `useState`/`useRef`/`useCallback` 原生 Hooks。
+
+```
+src/
+├── api/            # 5 个领域 API 模块（chat/session/user/message/knowledge）
+│   └── chat.ts     # fetchChatReply(一次性) + streamChatReply(SSE 流式)
+├── components/     # ChatWindow(对话窗) ConversationList(会话列表)
+│                   # LoginModal(登录) Header KnowledgeBaseModal UploadDocModal
+├── pages/          # AdminDocListPage（知识库文档管理页）
+├── hooks/useAuth.ts# 登录态：localStorage 持久化 + 手机号/密码格式校验
+├── config/index.ts # 双后端寻址（见 3.4）
+└── App.tsx         # 顶层状态编排：消息/会话/流式中断/历史加载
+```
+
+### 3.2 会话双轨模型（App.tsx）
+
+前端将消息归属分为两条轨道，避免"实时消息闪烁/丢失"与"历史回放"互相干扰：
+
+- **实时会话**（`liveSessionIdsRef` 集合）：本次运行期间聊过的会话，切回时直接用本地内存消息，**不查数据库**；
+- **历史会话**：首次切换时 `fetchSessionHistory` 从后端业务库回放（`userContent`/`agentContent` 成对展开）。
+
+新会话采用**临时 ID 迁移**策略：先本地 `local-session-{ts}` 保证消息有稳定归属 → 首条消息经 `/chat/message/save` 换取服务端 `session_id` → 本地消息整体迁移到服务端 ID 并选中。登出时仅关闭本次新建会话、`AbortController` 中断进行中的流式回复。
+
+### 3.3 SSE 流式已就绪（领先后端一步）
+
+`api/chat.ts` 的 `streamChatReply` 已完整实现流式消费，当前后端 `/chat/agent` 返回一次性 JSON 时**自动降级**整体解析：
+
+- 请求带 `Accept: text/event-stream`，按 `\n\n` 切分 SSE 事件（兼容 `\r\n` 跨块截断）；
+- 负载解析兼容 **OpenAI 风格**（`choices[].delta.content`）与**自定义风格**（`{content, need_emergency, active_agent}`）；
+- `[DONE]`/`DONE` 结束标记；`AbortSignal` 支持登出中断；
+- 增量经 `onDelta` 回调实时填充气泡，`ChatWindow` 已有"对方正在回复…"占位与流式气泡渲染。
+
+→ 后端补齐流式接口即可无缝点亮（见 [§8.1](#81-流式体验闭环优先级最高)）。
+
+### 3.4 双后端寻址（config/index.ts）
+
+| 地址 | 目标 | 用途 |
+|---|---|---|
+| `VITE_API_BASE_URL` | YiBot `:8000` | `/chat/*`、`/user/*`（问诊、会话、登录） |
+| `VITE_RAG_API_BASE_URL` | MCP Server `:8090` | `/rag/admin/doc/*`（知识库文档管理，Admin 页直连 Java 服务） |
+
+开发环境 RAG 地址为空串走 Vite 代理（`/rag → 127.0.0.1:8090`）规避跨域；生产直连。
+
+### 3.5 登录即注册
+
+`useAuth.login` → `loginOrRegister`（`/user/detail/mobile` 查询，404 则 `/user/add` 创建），手机号正则 `^1\d{10}$` 前端预校验，登录态仅存 localStorage。
+
+
+---
+
+## 4. MCP Tool Server（Java）
+
+> 独立仓库：`/Users/jizuz/WorkSpace/JAVA/work/mcp-servers`（Spring Boot + Spring AI MCP，端口 8090）
+> 双角色：**MCP 工具提供方**（YiBot 消费）+ **知识库权威源管道 & 管理后台**（前端 Admin 页消费）
+
+### 4.1 对外 MCP 工具（6 个）
+
+| 工具 | 类 | 说明 |
+|---|---|---|
+| `get_right_list` | RightTool | 查用户权益列表（当前 mock 数据，返回 `UserRightDTO` 结构化内容） |
+| `valid_right` | RightTool | 权益有效性/库存校验（mock，恒 true） |
+| `appoint_service` | RightTool | 提交预约（mock，打印后直接返回"预约成功"，**无落库、无回传通道**） |
+| `get_nearby_stores` | LocationMapTool | 附近门店查询 |
+| `queryWeather` | WeatherTool | 天气查询（wttr.in） |
+| `search_knowledge_base` | RagTool | **知识库多路召回**：向量(Qdrant top10) + BM25(top10) → **RRF 融合（k=60）** → topK≤5，支持六大健康分组过滤（cardio/resp/ped/endo/women/common_living）；声明 `readOnly/idempotent` 注解；任一路失败自动降级另一路 |
+
+### 4.2 知识库权威源管道（核心亮点）
+
+```
+管理后台 REST                 权威源（唯一事实）              事件驱动双索引
+──────────────               ─────────────────              ──────────────────────────────
+/rag/admin/doc/upload ──┐
+/rag/admin/doc/crawl    ├─▶ DocumentParseManager ─┐
+/rag/admin/doc/add     ─┘   (文件/网页/粘贴解析)    │
+                                                ▼
+/rag/admin/doc/update ──▶ KbDocService（唯一写入口）
+                          ① 先落 MySQL kb_doc（分块 500/重叠 100，docId=UUID，md5 存档）
+                          ② 服务端判定事件类型：md5/标题/分组任一变化才发 UPDATE（无变化不广播）
+                          ③ 发 RocketMQ 事件（ADD/UPDATE/DELETE）
+                          ✚ 上传场景 MQ 失败 → 回滚落库（调用方可安全重传）
+                          ✚ 更新场景 MQ 失败 → 不回滚，等每日重建兜底收敛（权威源已最新）
+                                                │
+                              topic: doc_chunk_vector_topic（tag 区分事件）
+                                                ▼
+                     ┌──────────────────────────┴──────────────────────────┐
+                     ▼ RagDocChangeConsumer（事件→索引同步）                ▼ DocVectorQdrantConsumer
+                     · 幂等：msg_id 去重(上限10w) + 消息md5                 · 内存缓冲队列 + 批量刷盘
+                       与权威源二次比对（乱序/过期消息跳过）                  (batch 20 / 1s)
+                     · 失败重试 3 次 → 死信告警                              · DashScope text-embedding-v3
+                     ▼                                                     · 1024 维写 Qdrant
+              Qdrant 向量索引 + 本地 BM25 索引（KbDocIndexManager）          · Qdrant 不可用仅告警不阻断启动
+                     ▲
+                     └── 兜底：每日 03:00 BM25 从权威源全量重建
+                         每周日 04:30 Qdrant 清空重灌（开关控制）
+```
+
+**设计要点**：
+
+- **权威源单一写入口**：业务层无权指定事件类型，"内容没变也广播重建"在结构上不可能发生；
+- **写路径分级容错**：新增走强一致（MQ 失败回滚），更新走最终一致（权威源已新、索引由定时任务收敛）——按业务风险选择一致性强度；
+- **检索即融合**：`search_knowledge_base` 不依赖单一索引，向量与 BM25 互为降级备份，RRF 融合后输出 `hitFrom`（向量/关键词/向量+关键词）可解释来源。
+
+### 4.3 文档管理后台（/rag/admin/doc/*）
+
+分页列表（分组/状态/关键词筛选）、详情回显（分块拼全篇）、文件上传、网页 URL 抓取、粘贴新增、编辑（服务端 md5 判变化）、**软删除/恢复**（恢复重发 ADD 重建双索引）、手动触发 BM25 全量重建。Chatte 前端 `AdminDocListPage` 直连本组接口——**文档管理不经过 YiBot 后端**，管理面与对话面天然隔离。
+
+### 4.4 服务注册（NacosDelayedRegister）
+
+关闭 Spring Cloud 自动注册，`ApplicationReadyEvent` 后延迟 2 秒手动 `registry.register()`：规避 Nacos Client STARTING 时序 BUG，并强制覆盖注册端口（杜绝 `port=0` 注册）。YiBot 侧按健康实例过滤 + 随机负载消费。
+
+
+---
+
+## 5. 核心数据流
+
+### 5.1 问诊主链路（一次提问的完整旅程）
+
+```
+用户输入
+  → Chatte streamChatReply（GET /chat/agent?question&session_id&user_id）
+  → YiBot api/chat.py：Redis 查会话 → 组装 ConsultState（含历史摘要+rights_memory）
+  → LangGraph.invoke（checkpointer 以 session_id 为 thread_id 自动恢复图状态）
+  → supervisor：关键词硬路由 / LLM 结构化路由 → 子 Agent
+      · symptom：多轮采集 → SymptomSummary
+      · triage：分级 P0~P3 → need_emergency
+      · education：调 MCP search_knowledge_base（Nacos 发现 8090 → RRF 检索）→ 引用作答
+      · rights：7 阶段状态机 + get_right_list/valid_right/appoint_service
+  → safety_guardian 兜底 → ChatResponse（结构化）
+  → 双链路落库（checkpoints / Redis→MySQL 异步）
+  → 前端解析 reply + need_emergency + active_agent 渲染
+```
+
+### 5.2 知识入库链路（Admin 页 → 检索可命中）
+
+```
+AdminDocListPage 上传/粘贴/抓取
+  → MCP Server /rag/admin/doc/* → KbDocService 权威源落库（kb_doc 分块+md5）
+  → RocketMQ 事件 → RagDocChangeConsumer（幂等+二次比对）
+  → 双索引：Qdrant 向量（异步批量 embedding）+ 本地 BM25
+  → education Agent 下一轮 search_knowledge_base 即可召回（RRF 融合）
+```
+
+### 5.3 会话回放链路
+
+```
+用户切换历史会话 → 前端判定非实时会话
+  → GET /chat/session/history → YiBot manager/session_manager
+  → MySQL session_message 回放（Redis 未命中时）
+  → userContent/agentContent 成对渲染
 ```
 
 ---
 
-## 2. 总体架构
+## 6. 核心亮点
 
-```
-┌──────────────┐
-│  React 前端   │
-└──────┬───────┘
-       │ GET /chat/agent?question&session_id&user_id
-┌──────▼─────────────────────────────────────────────────────┐
-│ FastAPI (main.py lifespan)                                  │
-│   app.state.graph = build_graph(checkpointer)   ← 启动构建一次│
-│   app.state.pool  = aiomysql 连接池                          │
-└──────┬─────────────────────────────────────────────────────┘
-       │ graph.ainvoke({messages, user_id, session_id},
-       │              config={thread_id: "user-{uid}-{sid}"})
-┌──────▼─────────────────────────────────────────────────────┐
-│ LangGraph StateGraph(ConsultState)      [AIOMySQLSaver 持久]│
-│                                                              │
-│   START ──► supervisor ──┬──► triage_agent ──► emergency ─►END(P0)
-│        (每轮先做全局记忆折叠) │        │            response      │
-│                           │        └──► supervisor(回传)      │
-│                           ├──► symptom_agent ─┬─► __end__(追问,│
-│                           │                   │   等下轮用户输入)│
-│                           │                   └─► supervisor  │
-│                           │                      (采集完+标记) │
-│                           ├──► education_agent ──► supervisor │
-│                           ├──► rights_agent ─┬─► __end__(预约 │
-│                           │                  │   追问/查询回复)│
-│                           │                  └─► supervisor / │
-│                           │                     final_response│
-│                           └──► final_response ──────► END     │
-│                                                              │
-│  硬路由(优先于 LLM 路由):                                    │
-│   · pending_symptom_collect  → 强制 symptom_agent             │
-│   · pending_triage=True        → 强制 triage_agent            │
-│   · rights_memory.appointing   → 强制 rights_agent            │
-└──────────────────────────────────────────────────────────────┘
-       │ 工具调用
-┌──────▼─────────────┬──────────────┬─────────────┐
-│ MCP Server(SpringAI)│  RAG 检索     │  Tavily     │
-│ Nacos→SSE per-call  │ Chroma+BM25  │ (备用Agent) │
-│ get_right_list 等   │ education降级用 │             │
-└────────────────────┴──────────────┴─────────────┘
-```
+跨三端提炼，均有代码出处：
 
-**一次请求的完整链路**(`GET /chat/agent`):
-
-1. 前端带 `question/user_id/session_id` 调用;
-2. `api/chat.py` 组装 `thread_id = user-{user_id}-{session_id}`,从 checkpointer 恢复历史状态(含全部记忆字段);
-3. 图从 `START` 进入 `supervisor`(每轮最先执行全局记忆折叠);
-4. 硬路由优先 → 否则 LLM 结构化路由选择子 Agent;
-5. 子 Agent 处理后以 `Command` 回 `supervisor` / `__end__`(等下轮用户输入)/ `final_response`;
-6. `final_response` 生成收尾回复 → END → 返回 `reply / need_emergency / active_agent`;
-7. 状态(含消息与记忆)由 checkpointer 写回 MySQL,下轮请求原样恢复。
-
----
-
-## 3. 分层编排
-
-### 3.1 两层结构:Supervisor + 子 Agent
-
-系统采用经典的 Supervisor 模式,而不是对等 Agent 网格。**Supervisor 只做调度不做业务**,业务全部下沉到子 Agent,每层职责单一:
-
-| 层 | 模块 | 职责 | 输出方式 |
+| # | 亮点 | 出处 | 一句话价值 |
 |---|---|---|---|
-| 编排层 | `supervisor_node` | 意图识别、动态路由、硬路由、全局记忆折叠 | `Command(goto=子Agent)` |
-| 编排层 | `final_response_node` | 汇总生成最终回复 | 普通 dict 追加消息 |
-| 编排层 | `emergency_response_node` | 急救话术兜底(P0 专用) | 普通 dict 追加消息 |
-| 业务层 | 4 个子 Agent 节点 | 领域问答/流程/工具调用 | `Command(goto=supervisor/__end__/...)` |
+| 1 | **Supervisor 硬路由保证** | `agent/supervisor.py` | 关键词命中直接路由，LLM 只兜模糊意图——路由漏判被工程手段封死 |
+| 2 | **双层安全防线** | `agent/struct/safety.py` | 正则前置（快）+ LLM 结构化兜底（泛化），医疗安全不许单点 |
+| 3 | **分层记忆（S1 摘要折叠 + S2 权益私有镜像）** | `agent/struct/memory.py` | 长会话不爆 token；跨轮预约权益零丢失、零重复查询 |
+| 4 | **跨请求 7 阶段预约状态机** | `agent/sub_agent/rights_agent.py` | checkpointer 驱动，对话中断/重启后流程精确续走 |
+| 5 | **全链路 8 个 Pydantic Schema 契约** | `agent/struct/schemas.py` | LLM 输出全部结构化，解析失败自动降级，接口永不裸奔 |
+| 6 | **企业级 MCP 链路（Nacos+SSE→Streamable 降级+per-call 会话）** | `tools/mcp.py` | 服务发现、传输协商、无状态调用，Python 侧兼容 Spring AI 特有格式 |
+| 7 | **知识库权威源管道** | MCP Server `KbDocService`/`RagDocChangeConsumer` | 单一写入口 + 事件驱动 + 幂等/二次比对 + 定时兜底重建，索引终态收敛 |
+| 8 | **混合检索（向量+BM25→RRF）与降级** | MCP Server `RagTool`；YiBot `rag/core/hybird.py`（Chroma 0.6 + BM25 0.4 本地降级） | 双路互为备份，`hitFrom` 可解释，空结果不编造 |
+| 9 | **双链路会话持久化** | `manager/session_manager.py` + `AIOMySQLSaver` | 图状态与业务回放解耦，各自演进互不绑架 |
+| 10 | **前端会话双轨 + 临时 ID 迁移** | Chatte `App.tsx` | 实时会话不查库、历史会话库回放；新会话 ID 平滑迁移无闪烁 |
+| 11 | **前端 SSE 流式预留（含自动降级）** | Chatte `api/chat.ts` | 后端未流式也能跑，一旦升级零前端改动 |
+| 12 | **管理面与对话面隔离** | Chatte Admin 页直连 MCP Server 8090 | 文档运维流量不打扰问诊链路 |
 
-### 3.2 图的构建(`build_graph`)
 
-```python
-g = StateGraph(ConsultState)
-g.add_node("supervisor", supervisor_node)          # 调度
-g.add_node("triage_agent", triage_agent_node)      # 分诊
-g.add_node("symptom_agent", symptom_agent_node)    # 症状采集
-g.add_node("education_agent", education_agent_node)# 科普
-g.add_node("rights_agent", rights_agent_node)      # 权益
-g.add_node("emergency_response", ...)              # 急救兜底
-g.add_node("final_response", ...)                  # 收尾
-g.add_edge(START, "supervisor")                    # 固定入口
-g.add_edge("emergency_response", END)
-g.add_edge("final_response", END)
-return g.compile(checkpointer=checkpointer)        # MySQL 持久化
-```
+---
 
-要点:
+## 7. 已知限制与风险
 
-- **静态边只有 3 条**(入口 + 两个终点),其余流转全部由节点返回的 `Command(goto=...)` 在**运行时动态决定**——这是 LangGraph 1.x 的 `Command` 机制,子 Agent 可以"越级"跳转(如 `triage_agent` 直接 `goto="emergency_response"`,`rights_agent` 守卫直接 `goto="final_response"`),不必回到 supervisor 中转;
-- **图在 `main.py` lifespan 中只构建一次**,常驻 `app.state.graph`;修改任何节点代码需重启 uvicorn 生效;
-- checkpointer 采用 `AIOMySQLSaver`(aiomysql 连接池,`autocommit=True`),按 `thread_id` 隔离不同用户会话。
-
-### 3.3 Supervisor 的路由决策
-
-软路由(LLM 结构化输出)的输入组装刻意保持"轻":
-
-```
-SystemMessage: SUPERVISOR_PROMPT(含当前 active_agent)
-             + background_block(global_summary)   ← 全局记忆摘要(背景)
-Human/AI ×N : recent_rounds(messages, 15)         ← 最近 15 轮原始消息
-```
-
-输出 schema(`SupervisorDecision`):`route ∈ {triage_agent, symptom_agent, education_agent, rights_agent, FINISH}` + `reason`(用于日志)。路由 prompt 内嵌协作规则:信息足够分诊直接 triage、信息模糊先 symptom、采集完成后通常再 triage、education 科普未覆盖/涉及个人/越界时转 symptom 采集、采集进行中不中途改路、无后续则 FINISH、主管不得直接回答医学问题。
-
-### 3.4 硬路由:状态标记优先于 LLM 判断
-
-纯 LLM 路由存在"软判断失灵"(漏分诊、漏回流程)的问题,系统用**两个状态标记做确定性保证**,且都排在 LLM 路由之前:
-
-| 标记 | 写入方 | 触发位置 | 效果 |
+| # | 限制 | 影响 | 位置 |
 |---|---|---|---|
-| `pending_triage` | symptom_agent 采集完成时置 `True` | supervisor 最前 | 无条件 `goto=triage_agent` 并消费标记,保证"采集→分诊"链路不依赖 LLM |
-| `rights_memory.appointing` | rights_agent 进入预约流程时写入 | supervisor 次前 | 预约流程未结束前,用户所有输入(补信息/选门店/取消)无条件回 rights_agent,避免被路由到别的 Agent 打断流程;若本轮内容与预约无关,rights_agent 内部自动回落查询流程 |
+| 1 | 权益/预约 MCP 工具为 mock：`appoint_service` 无落库、无机构确认回传通道，`release_right`（释放权益）不存在 | 预约只到"提交成功"，超时取消/权益回滚全链路缺失（见 §8.2） | MCP Server `RightTool.java` |
+| 2 | 后端 `/chat/agent` 未流式（一次性 JSON） | 长回复等待感明显；前端已备好 SSE 消费能力 | YiBot `api/chat.py` |
+| 3 | 图内回复不自动落业务库，依赖前端逐条上报 `message/save` | 前端漏报/异常退出时历史回放缺消息（双链路不一致窗口） | YiBot `api/chat.py` + Chatte `App.tsx` |
+| 4 | 接口无鉴权（user_id 明文参数）；前端登录态仅 localStorage | 任意 user_id 可读写他人会话，生产前必须补 token 鉴权 | 三端 |
+| 5 | MCP 路径依赖环境变量对齐：YiBot 默认拼 `/sse`，MCP Server 实际为 STREAMABLE `/mcp`（靠 SSE 失败→降级同 URL streamable 才通） | 配置错误时多一次失败重连；建议 `MCP_SSE_PATH=/mcp` 显式声明 | YiBot `tools/mcp.py`、MCP Server `application.yml` |
+| 6 | `graph.invoke` 未设 `config={"recursion_limit": ...}`；MCP 链路四层超时（Nacos/HTTP/MCP/LLM）未统一 | 极端循环或慢依赖时请求悬挂 | YiBot `api/chat.py`、`tools/mcp.py` |
+| 7 | 工具调用无重试（网络抖动直接失败给到 LLM 兜底话术） | 可用性依赖单次成功率 | YiBot `tools/mcp.py` |
+| 8 | `chit_chat` / `search_agent`（联网 Tavily）已实现未挂载到路由表 | 闲聊与联网搜索场景实际不可达 | YiBot `agent/supervisor.py` |
+| 9 | MCP Server `application.yml` 提交了明文 DashScope API Key（及 Nacos/MySQL 弱口令） | **凭据泄露风险，须立即轮换并改环境变量注入** | MCP Server `application.yml` |
+| 10 | 医疗合规审计缺失：无全链路操作留痕、无模型版本/prompt 版本快照 | 生产化前置项 | 三端 |
 
-> 硬路由的 update 会与当轮记忆折叠的 update 合并(`{**(mem_update or {}), ...}`),保证折叠不因硬路由短路而丢失。
 
-### 3.5 子 Agent 的三种返回路径
+---
 
-| 路径 | 含义 | 典型场景 |
+## 8. 未来探索方向
+
+### 8.1 流式体验闭环（优先级：最高）
+
+**现状**：前端 `streamChatReply` 已完整支持 SSE（增量渲染、[DONE]、AbortSignal、非流式自动降级）；后端 `/chat/agent` 仍是阻塞式一次性 JSON。
+
+**改造**：FastAPI 侧新增（或改造为）`StreamingResponse(media_type="text/event-stream")`，LangGraph 侧以 `graph.astream_events(input, version="v2")` 逐 token 下发：
+
+```
+data: {"content": "您"}
+data: {"content": "好"}
+data: {"content": "，"}
+...
+data: {"content": "", "need_emergency": false, "active_agent": "symptom"}   # 尾帧带元信息
+data: [DONE]
+```
+
+前端解析已兼容此格式，**零前端改动点亮**。配套收益：多轮预约的"正在查询门店…"等阶段事件也可作为 SSE 中间帧下发，体验从"等 10 秒出全文"变为"秒级首字+过程可见"。
+
+### 8.2 预约全生命周期编排（Temporal，优先级：高）
+
+**边界原则**：LangGraph 管**对话内**编排（秒级、轮内决策图）；Temporal 管**对话外**业务生命周期（下单成功后的长周期流程）。两者以旁路拆分集成，不把 Temporal 塞进图节点。
+
+```
+现状（断点）：appoint_service(mock) ──▶ "预约成功"（全链路终点）
+
+目标（Temporal Workflow：AppointmentLifecycle）：
+  下单成功 ──▶ Activity: 写 appointment 业务表(submitted/confirming)
+           ├──▶ Timer(等机构确认, 如 2h)
+           │      ├── Signal: 机构确认回调 → confirmed → 就诊前 24h Timer → 提醒 → 随访
+           │      └── 超时 → 补偿: cancel + Activity: release_right 释放权益 → 通知用户
+           └── Signal: 用户主动取消 → 同上补偿
+```
+
+**为什么是 Temporal 的标准场景**（四项全中）：长周期 Timer（小时/天级）、外部事件（Signal：机构回调/用户取消）、补偿事务（超时释放权益，失败自动重试至一致）、全程可观测（每个预约一条可追溯的执行历史）。
+
+**落地前置条件**（均为业务决策，非技术问题）：
+1. 机构确认结果回传方式：回调（MCP Server 暴露回调接口）还是轮询（补 `query_appoint_status` 工具）；
+2. `release_right` 工具需在 MCP Server 实现（当前仅有 `valid_right` 校验）；
+3. 提醒/随访触达通道：短信/推送，还是用户下次进入会话时由 Agent 主动发起（后者可复用 LangGraph `interrupt`）。
+
+**触发时机**：预约日均千单以上 / 出现真实资损（超时未释放权益引发客诉）/ 出现第 2 条以上长周期流程时引入；此前可先用「MySQL 状态表 + APScheduler 扫描」过渡（schema 已规划：`status: submitted→confirming→confirmed/cancelled_timeout/cancelled_user→reminded→followed_up` + `confirm_deadline` + 幂等字段）。
+
+### 8.3 记忆体系演进
+
+- **S3（同构私有记忆）**：symptom / education / triage 各自增加私有记忆槽（症状采集断点续问、科普不重复推、分诊结论沉淀），复用 S2 `rights_memory` 的成熟模式；
+- **S4（类型化记忆）**：`rights_memory` 从 dict 升级为 Pydantic 模型，schema 校验前置到记忆读写；
+- **长期用户健康画像**：跨会话聚合（既往分诊史/过敏史/慢病标签），入库独立 `user_profile` 表，问诊时注入 Supervisor 与 symptom/triage 的上下文——从"记得这轮对话"进化到"记得这个用户"。
+
+
+### 8.4 检索质量进阶
+
+- **精排（Rerank）**：RRF 粗排 top10~20 后接交叉编码器精排（DashScope `gte-rerank` / 本地 bge-reranker），科普引用准确率有望显著提升；
+- **查询改写**：多轮对话中用户问句常含指代（"那这个药呢"），education Agent 检索前用轻量 LLM 结合会话改写为独立查询（含 HyDE 方向探索）；
+- **评测驱动**：建设检索评测集（query→应命中文档标注），召回率/MRR 纳入 CI，避免调参凭感觉；
+- **索引侧**：BM25 中文分词优化（当前 Lucene Analyzer）、医学同义词表扩展（"心梗/心肌梗死/AMI"）。
+
+### 8.5 安全与合规
+
+- **鉴权**：JWT（登录颁发，`/chat/*`、`/rag/admin/*` 统一校验），前端 fetch 封装注入 Authorization；
+- **Agent 评测与红队**：分诊准确率评测集（P0~P3 标注语料）、越权/诱导/幻觉红队用例回归；
+- **审计合规**：全链路操作留痕（谁在何时问了什么、引用了哪篇文档、调用了哪个工具）、模型与 prompt 版本快照，满足医疗可追溯要求。
+
+### 8.6 工程化与可观测
+
+- **统一超时/重试**：MCP 四层超时对齐、工具调用引入 `tenacity` 指数退避、`graph.invoke` 补 `recursion_limit`（低垂果实，可先行）；
+- **全链路追踪**：LangSmith 或 OpenTelemetry（trace_id 贯穿 Chatte→YiBot→MCP Server→Qdrant/MQ），慢轮次定位从"看日志猜"变为"看瀑布图"；
+- **CI/CD 与容器化**：三端镜像化（前端 Nginx / YiBot uv / MCP Server JRE），docker-compose 一键起全套依赖（MySQL/Redis/Nacos/RocketMQ/Qdrant）。
+
+### 8.7 能力扩展
+
+- **挂载 chit_chat / search_agent**：路由表加两项即可激活闲聊与 Tavily 联网搜索（代码已就绪）；
+- **多模态问诊**：报告单/患处照片上传（VLM 识别 → 注入 symptom 采集），老年人语音输入（ASR → 同链路）；
+- **主动式健康管理**：结合 §8.2 的随访流程，Agent 在用户进入会话时主动发起随访追问、复诊提醒——平台从"被动应答"升级为"主动关怀"。
+
+---
+
+## 9. 部署与配置
+
+### 9.1 端口与关键环境变量
+
+| 服务 | 端口 | 关键配置 |
 |---|---|---|
-| `goto="supervisor"` | 本轮业务完成,交还调度 | 分诊完成、科普回答完、权益查询完 |
-| `goto="__end__"` | 本轮向用户抛出追问,**等待下一条用户消息**(跨 HTTP 请求的多轮) | symptom 追问、预约槽位追问 |
-| `goto="emergency_response"` / `"final_response"` | 越级直达终点 | P0 急救、rights 死循环守卫触发 |
+| Chatte 前端 | 5173（dev） | `VITE_API_BASE_URL`（YiBot）、`VITE_RAG_API_BASE_URL`（MCP Server） |
+| YiBot 后端 | 8000 | `GLM_API_KEY`、`MYSQL_*`、`REDIS_*`、`NACOS_*`、`MCP_SSE_PATH`（建议 `/mcp`）、`RAG_SWITCH` 等 20+ 项，见 README「快速开始」 |
+| MCP Tool Server | 8090 | `spring.ai.mcp.server`（STREAMABLE `/mcp`）、`rocketmq.proxy-endpoint`、`qdrant.rest-url`、`dashscope.*`、`rag.recall.*`（**API Key 应改环境变量注入**） |
 
-### 3.6 全局状态 `ConsultState`
+### 9.2 启动顺序建议
 
-所有节点共享同一个 TypedDict 状态(不做子图拆分,以**字段前缀做逻辑命名空间**):
-
-```python
-class ConsultState(TypedDict):
-    messages: Annotated[list, add_messages]  # 主信箱:reducer 追加/RemoveMessage 删除
-    user_id: int                             # 登录用户(权益工具直接使用)
-    session_id: str
-    next_agent / active_agent / agent_turn_count  # 路由与子 Agent 轮次
-    need_emergency: bool                     # 红旗标记(API 返回给前端)
-    summary / symptom_summary                # 诊前摘要 / 症状总结(triage 复用)
-    pending_triage: bool                     # 硬路由标记
-    global_summary: str | None               # S1:Supervisor 全局汇总记忆
-    rights_memory: dict | None               # S2:rights 私有记忆(见第 6 章)
+```
+1. 基础设施：MySQL → Redis → Nacos → RocketMQ(proxy) → Qdrant
+2. MCP Tool Server（等 Nacos 注册完成，含 BM25 首建）
+3. YiBot 后端（uvicorn main:app）
+4. Chatte 前端（npm run dev）
+5. 知识库预填充：Admin 页上传文档 → 观察 MQ 消费日志 → education Agent 验证召回
 ```
 
-`messages` 使用 `add_messages` reducer:`Command(update={"messages": [...]})` 默认按 id 追加;传 `RemoveMessage(id=...)` 则从 checkpointer 持久化历史中删除——这是记忆折叠能"物理收缩"主信箱的机制基础。
+### 9.3 相关文档
+
+- 产品与接口说明：[`/README.md`](../README.md)
+- 前端仓库：`FRONT/Chatte`（详见其 README）
+- MCP 工具服务仓库：`JAVA/work/mcp-servers`
 
 ---
 
-## 4. 多轮对话机制
+*本文档基于代码现状编写，所有亮点与限制均标注代码出处；§8 为规划项，落地前请以最新代码为准。*
 
-系统中的"多轮"同时存在于**三个嵌套层次**,理解层次关系是理解本系统的关键:
 
-```
-HTTP 请求 N(用户发一条消息)
- └─ LangGraph 图执行(外层循环:supervisor ⇄ 子 Agent,受 LangGraph recursion_limit 约束)
-     └─ 子 Agent 内部 ReAct 循环(create_agent:LLM⇄Tool,受内层 recursion_limit=10 约束)
-跨请求多轮 = 用户消息 N+1 到来时,checkpointer 按 thread_id 恢复全部状态(消息+记忆+流程槽位)
-```
 
-### 4.1 跨请求多轮(checkpointer 驱动)
 
-- 会话标识 `thread_id = user-{user_id}-{session_id}`,每个 (用户, 会话) 一条独立的状态时间线;
-- 每轮 `graph.ainvoke` 结束,`AIOMySQLSaver` 把整个 `ConsultState`(含 `global_summary`、`rights_memory`、预约槽位)写入 MySQL;
-- 下一条用户消息到来时状态原样恢复,子 Agent 据此判断"我在等什么"(等手机号?等选店?);
-- 典型依赖跨请求状态的多轮:symptom 的 `agent_turn_count`(追问轮次)、rights 的 `appointing` 槽位状态机。
 
-### 4.2 症状采集多轮(symptom_agent)
 
-```
-轮1: 用户"我肚子疼" → symptom_agent 生成追问 → goto __end__(等用户)
-轮2: 用户补充        → 追问轮次 +1 → 再追问 ...
-轮N: agent_turn_count >= 3 → 硬上限强制总结
-      → goto supervisor,update: symptom_summary + pending_triage=True
-      → supervisor 硬路由 → triage_agent
-```
 
-- 5 个采集维度:部位、性质、持续时间、频率、诱因/缓解因素;prompt 约束**每轮只问一个维度**、不重复问;
-- `should_continue_collecting` 用第二个 LLM(`CollectionStatus` 结构化输出)判断采集进度(collected/missing/next_question);
-- **硬上限 `turn >= 3` 强制总结**是收敛的最终保证;判断器调用异常时有 fallback(轮次≥2 直接总结,否则问通用问题)。
-
-### 4.3 权益预约多轮(rights_agent 状态机)
-
-预约是全系统最复杂的多轮流程,一个**跨请求持久化的槽位状态机**:
-
-```
-用户:"我想用洁牙卡预约"
-  └─ rights_agent 意图分流(RightsIntent: query/appointing)
-      └─ appointing = {stage: "collect"}  ← 写入私有记忆,随 checkpointer 持久化
-
-stage=collect      追问 姓名/手机号/预约日期(每轮一问,goto __end__)
-      │ 必填齐备
-      ▼
-  get_right_list(userId) → RightMatch 匹配 rightId
-      │ 匹配失败 → 列出权益让用户选(支持"第一个/1"序号应答),连续 2 次失败委婉终止
-      ▼
-  valid_right(rightId) → 保守判定(宁可少约不可误约),不过则终止
-      ▼
-stage=wait_location  追问所在城市/区域
-      ▼
-  get_nearby_stores(location) → 列出门店(支持序号选择)
-      ▼
-stage=wait_store   等用户选店
-      ▼
-  appoint_service(req={appointDatetime, mobile, rightId, userName})
-      → success / fail / unknown → 委婉收尾,appointing=None 流程清空
-```
-
-每轮入口由 `AppointingTurn` 结构化抽取完成三件事:
-
-1. **意图判断**:`cancel`(取消)/ `other`(与预约无关,回落查询流程)/ `continue`;
-2. **槽位抽取**:仅取用户明确给出的内容,禁止推测;口语日期换算 `YYYY-MM-DD`,但**严禁默认填充今天**;序号应答("第一个")结合上一轮列表换算成实际权益/门店名(修复过的序号死循环即在此链路);
-3. **生成下一个追问**(`next_question`,一次只问一项)。
-
-槽位合并(`_merge_slots`)带脏值防御:GLM 偶尔把"未提供"输出为字面 `"null"/"none"` 字符串,一律视为未提供,防止脏值覆盖已收集槽位或传入下单接口。
-
-### 4.4 子 Agent 内部多轮(ReAct)
-
-`rights_agent`(查询流程)与未挂载的 `chit_chat/search` 用 `create_agent` 构建标准 ReAct Agent,LLM 自主决定工具调用序列(如先 `get_right_list` 再 `get_nearby_stores`)。内层显式设置 `recursion_limit=10`,防止 LLM 固执重复发同一 tool_call 时撞上外层极高的默认上限而长时间空转。
-
----
-
-## 5. 规则与安全机制
-
-医疗场景的安全底线是"**规则先行、LLM 兜底、宁紧勿松**"。系统内安全机制按层次分布如下:
-
-### 5.1 分诊安全(triage_agent):规则层 + LLM 层取更严
-
-**规则前置筛查(零延迟、确定性)**——在调用 LLM 之前,先对用户最新消息做关键词匹配:
-
-```python
-P0_KEYWORDS = ["胸痛", "呼吸困难", "昏迷", "抽搐", "大出血", "呕血", "便血",
-               "口角歪斜", "半身不遂", "说不出话", "剧烈头痛", "意识不清", "口唇发紫"]
-P1_KEYWORDS = ["高热不退", "持续呕吐", "咯血", "剧烈腹痛", "消瘦"]
-
-def pre_triage_check(text): ...   # 命中 P0 词 → 直接 "P0";否则命中 P1 词 → "P1"
-```
-
-三层防线:
-
-| 防线 | 逻辑 |
-|---|---|
-| 规则命中 P0 | **跳过 LLM 分诊**,直接 `goto=emergency_response` + `need_emergency=True`(API 返回给前端做强提示) |
-| 规则 P1 ∧ LLM 给 P2/P3 | **规则层升级**:强制改判 P1,reasoning 追加"规则层升级:检测到高风险关键词"——规则与 LLM 结论**取更紧急者** |
-| LLM 独立判 P0 | 走同样的紧急通道 |
-
-LLM 层 prompt 亦内嵌保守原则:**信息不足以判断时按更紧急级别处理**;分诊不确诊疾病、不推荐药物剂量;紧急情况统一推荐急诊科。若已有 `symptom_summary`,拼入上下文避免重复采集。
-
-### 5.2 科普越界拦截(education_agent):正则前置 + LLM 双保险
-
-```python
-OUT_OF_SCOPE_PATTERNS = [
-    r"我(这|该|要)吃(什么|啥)药",          # 用药咨询
-    r"帮我(看看|解读).*(报告|检查|化验)",    # 报告解读
-    r"我(是不是|得了|这是).*(病|癌|炎)",     # 求诊断
-    r"(给我|帮我).*(开药|处方|剂量)",        # 开方
-]
-```
-
-- **第一层(正则)**:命中即不检索不生成,置 `pending_symptom_collect` 经 supervisor 硬路由转症状采集→分诊链路;
-- **第二层(LLM)**:生成结果的 `out_of_scope` 字段为真时同样转采集链路——防止正则漏网;
-- **分组过滤**:MCP 检索前由大模型分析用户请求得出知识库分组(`KBSearchPlan.doc_group` → `docGroup` 参数),入组仅限服务端枚举值(cardio_health=心血管/resp_health=呼吸/ped_health=儿童健康/endo_health=内分泌/women_health=女性健康/common_living=通用居家健康),不确定/跨分组/分析失败/非法值一律不传分组检索全部;分组过滤后无命中自动退回全分组重检一次,防分组过窄漏检;
-- **检索未覆盖**:MCP 与本地 RAG 两路均无结果时,不让 LLM 凭空生成,直接转采集链路;
-- **涉及个人情况**:`needs_medical_attention` 为真时先输出科普回答 + 就医提示,再转采集链路;
-- 回答强制基于检索资料,尾部附"不能替代医生诊断"免责声明与来源列表。
-
-### 5.3 权益流程安全(rights_agent)
-
-| 机制 | 实现 | 风险针对 |
-|---|---|---|
-| 抽取禁推测 | prompt 强制"仅基于用户明确给出的内容,禁止推测编造";日期严禁默认填充今天 | LLM 幻觉伪造用户信息 |
-| 脏值过滤 | `"null"/"none"` 字面字符串视为未提供 | GLM structured output 脏输出污染槽位 |
-| 校验保守判定 | `_valid_passed`:返回文本含"失败/不可用/过期/已使用"→不通过;必须明确含"通过/可用"才通过,**无法判定视为不通过** | 误约过期/不可用权益 |
-| 匹配失败熔断 | rightId 无法唯一确定时列出让用户选;**连续 2 次失败委婉终止**,不无限重试 | 匹配死循环 |
-| 结果三态判定 | `_appoint_outcome`:success/fail/**unknown**(结果不明提示以短信为准,不谎报成功) | 下单结果误报 |
-| 身份强校验 | user_id 无法解析为有效整数时,提示重新登录,**不代为猜测** | 错号下单 |
-| 服务降级话术 | MCP 不可用/超时 → 统一委婉终止"本次先不为您预约",不半途挂死 | 工具链故障时错误下单 |
-
-### 5.4 循环与资源防护
-
-- **rights 死循环守卫**:Agent 刚回复完(`answered=True` 且主信箱末条是 AI 消息、无 tool_calls)却被再次路由进来——这是 supervisor 路由循环的特征。守卫直接 `goto=final_response`,不再连 MCP/调 LLM(否则 LangGraph 高默认 recursion_limit 下会空转数千轮直到崩图);
-- **内层 ReAct 上限**:`recursion_limit=10`;
-- **API 层中断防御**(`api/chat.py`):若图被静默中断、`messages[-1]` 仍是用户消息或内容为空,不原样回显,而是返回"处理中断请重试"+ `need_emergency` 状态;
-- **MCP 超时**:获取工具与每次 callTool 均包 `asyncio.wait_for(15s)`,`CancelledError`(BaseException)显式捕获,失败一律降级不抛出。
-
-### 5.5 降级策略汇总(设计原则:任何失败不阻断主流程)
-
-| 故障点 | 降级行为 |
-|---|---|
-| 全局记忆折叠失败 | 本轮跳过,旧消息暂留,下轮再试 |
-| rights 私有折叠摘要失败 | 硬截断丢弃头部,保住最新问答 |
-| MCP 全链路失败 | 权益服务"暂时不可用"话术,图正常收尾 |
-| symptom 采集判断器异常 | 按轮次 fallback(≥2 总结,否则通用追问) |
-| 图静默中断 | API 层兜底回复 |
-
----
-
-## 6. 分层记忆架构
-
-> 2026-09 落地的 S1+S2 方案。设计取舍:维持共享 `ConsultState` + **字段前缀命名空间**(不做子图拆分),记忆分三层,读写权限各不相同。
-
-### 6.1 三层记忆总览
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│ ConsultState(随 AIOMySQLSaver 按 thread_id 持久化)           │
-│                                                              │
-│ ① 主信箱 messages(滚动窗口)                                  │
-│    · 物理存储全部"活跃"对话,保留最近 WINDOW_ROUNDS=15 轮       │
-│    · 超窗旧消息被 supervisor 折叠删除(RemoveMessage)          │
-│    · 写:所有节点   读:supervisor(窗口)/其余节点(全量=窗口)     │
-│                                                              │
-│ ② global_summary — Supervisor 全局汇总记忆 [S1]               │
-│    · 主信箱折叠出的 ≤300 字滚动摘要,会话级事实库                │
-│    · 写:仅 supervisor   读:supervisor 路由/收尾、rights 分流   │
-│                                                              │
-│ ③ rights_memory — rights 私有记忆 [S2]                        │
-│    {summary, messages(镜像≤12), answered, appointing}         │
-│    · 写:仅 rights_agent  读:supervisor 只读 appointing 做硬路由│
-└─────────────────────────────────────────────────────────────┘
-```
-
-常量(`agent/struct/memory.py`):`WINDOW_ROUNDS=15`(主信箱轮数窗口)、`PRIVATE_MSG_LIMIT=12`(私有镜像条数上限)、`PRIVATE_KEEP_TAIL=8`(折叠后保留尾部条数,保证覆盖"上一问+最新答"等抽取依赖)。
-
-### 6.2 S1:全局汇总记忆(supervisor 维护)
-
-**折叠时机**:supervisor 每轮执行**最先**做记忆维护(`_maintain_global_memory`),保证无论本轮走硬路由还是软路由,输入都已收敛。
-
-**折叠流程**:
-
-```
-messages 超过 15 轮窗口?
-  ├─ 否 → 跳过
-  └─ 是 → fold_part = 窗口外的旧消息
-        ├─ 存在无 id 消息(无法 Remove)→ 降级:本轮跳过,下轮再试
-        ├─ fold_messages(LLM 把 旧摘要+待归档对话 合并为新摘要,≤300字)失败
-        │     → 降级:本轮跳过,旧消息暂留
-        └─ 成功 → update = {RemoveMessage×N(物理删除旧消息), global_summary=新摘要}
-                  该 update 与后续路由/硬路由的 update 合并下发
-```
-
-**摘要 prompt(`FOLD_PROMPT`)的保留要点**:身份信息(姓名/手机号)、症状与采集进度、分诊结论、已查权益及结果、预约办理进度、用户偏好与时间线;丢弃寒暄与重复;第三人称 ≤300 字。
-
-**消费方**(输入组装模式 = `background_block(摘要) + recent_rounds(窗口)`,替代旧的全量历史):
-
-- supervisor 软路由:背景摘要 + 最近 15 轮;
-- `final_response` 收尾:同上;
-- rights_agent 意图分流:全局摘要 + 私有镜像尾部。
-
-> 副作用收益:triage/symptom/education 仍直接读 `state["messages"]`,但由于主信箱本身被折叠到 15 轮窗口,这些节点的输入 token 同样被物理封顶。
-
-### 6.3 S2:rights 私有记忆(rights_agent 维护)
-
-私有记忆解决两个问题:① 其他 Agent 的长对话污染权益上下文;② 预约槽位状态需要可靠的私有存储。
-
-结构:`rights_memory = {summary, messages, answered, appointing}`,由"四件套"维护:
-
-| 组件 | 职责 |
-|---|---|
-| `_init_mem` | 从 state 取出/初始化私有记忆(缺字段 setdefault 补全) |
-| `_sync_mirror` | **幂等增量同步**:把主信箱尾部"最后一条 AI 之后新增的用户消息"补进私有镜像(按尾条消息 id 去重) |
-| `_fold_mirror` | 镜像超 12 条 → 头部 LLM 折叠进 `summary`,留尾 8 条;摘要失败则**硬截断保尾部**(槽位抽取依赖最近问答) |
-| `_rights_emit` | 统一出口:回复**双写**(主信箱 + 私有镜像),并把整个 `rights_memory` 写回 state 持久化 |
-
-rights_agent 的所有 LLM 调用(意图分流取镜像尾 6 条、槽位抽取取尾 8 条、ReAct 查询取全镜像)都以私有镜像为对话来源,并拼两层背景:`background_block(global_summary)` + `background_block(私有 summary)`。
-
-**权限约定**:`rights_memory` 只有 rights_agent 可写;supervisor 仅读 `appointing` 字段做硬路由,形成单向依赖,避免记忆双写冲突。
-
-### 6.4 记忆读写权限矩阵
-
-| 字段 | supervisor | triage | symptom | education | rights | API |
-|---|---|---|---|---|---|---|
-| `messages` | 读写(折叠+窗口读) | 读 | 读写 | 读 | 读写(经镜像+双写) | 只取末条 |
-| `global_summary` | **读写** | - | - | - | 读 | - |
-| `rights_memory` | 只读 `appointing` | - | - | - | **读写** | - |
-| `symptom_summary`/`pending_triage`/`pending_symptom_collect` | 读写(消费标记) | 读 | 写 | 写(`pending_symptom_collect`) | - | - |
-
-### 6.5 长会话下的信息流(示例)
-
-```
-第 1~15 轮: 主信箱全量保存,三层记忆无折叠
-第 16 轮起: supervisor 折叠最旧一轮 → global_summary 逐步累积事实
-            主信箱恒 ≈15 轮 → 所有读全量历史的节点 token 恒定
-rights 视角: 用户穿插咨询权益时,镜像只含权益相关往返(≤12 条)
-            更早的权益对话在私有 summary 里,跨 Agent 的对话在 global_summary 里
-预约期间:   appointing 槽位随 rights_memory 整体持久化,重启/换轮不丢
-```
-
----
-
-## 7. 工具调用层
-
-### 7.1 MCP 工具链(`tools/mcp.py`)
-
-```
-Nacos 服务发现(v1/v2 兼容,鉴权 token,健康实例过滤,多实例随机负载)
-  → 拼接 SSE URL(http://{ip}:{port}/sse)
-  → sse_client 建连 + ClientSession.listTools
-  → 输入 schema 转 Pydantic args_model → 包装为 McpRemoteTool(BaseTool)
-```
-
-- **per-call 建连模式**:`get_mcp_tools` 中连接用完即关;工具实际执行时各自独立建连——无长连接保活负担,代价是每次调用多一次握手;
-- **SpringAI 兼容 patch**:SpringAI MCP Server 会把 List 结果直接放进 `structuredContent`(规范要求 object),启动时 monkeypatch 放宽该字段类型为 `Any`,否则 callTool 解析报错但服务端实际已执行;
-- 工具获取失败返回空列表(主流程不崩),rights 侧再包 15s `wait_for` 超时;
-- 当前使用的远端工具:`get_right_list`(查权益)、`get_nearby_stores`(附近门店)、`valid_right`(权益校验)、`appoint_service`(预约下单)、`queryWeather`(天气)、`search_knowledge_base`(健康科普知识库检索,参数 `query`+`topK`+`docGroup` 可选分组过滤,`education_agent` 专用可选工具,未暴露时降级本地 RAG)。
-
-### 7.2 RAG 检索(`rag/core/hybird.py`)
-
-- Chroma 向量召回(通义 `text-embedding-v3`,collection `rag_knowledge`)权重 0.6 + BM25 关键词召回(jieba 分词,k=5)权重 0.4,`EnsembleRetriever` 融合;
-- 结果硬截断 top-5 防 prompt 爆 token;检索为空时格式化为"未检索到资料,谨慎回答"提示;
-- 仅 `education_agent` 使用,定位为其**降级检索通道**(MCP `search_knowledge_base` 不可用时兜底,不支持分组过滤);向量库数据经 `manager/rag_manager` + `api/rag.py` 管理(文件/网页加载器在 `rag/loader/`)。
-
-### 7.3 其他工具
-
-- `tools/tavily.py`:联网搜索/网页提取(`search_agent` 专用,当前未挂载);
-- `tools/custom_tools.py`:本地 mock 工具(天气/计算/时间)+ `handle_tool_errors` 工具错误中间件(把异常转成给模型的 ToolMessage 而非崩溃);
-- `tools/mcp_tool.py`:本地 FastMCP Server(高德天气,stdio 传输),可作独立 MCP 服务端调试。
-
----
-
-## 8. 会话与持久化
-
-系统存在**两条并行的会话数据链路**(注意区分):
-
-### 8.1 图状态链路(LangGraph 原生)
-
-- `thread_id = user-{user_id}-{session_id}` → `AIOMySQLSaver` 自动读写 checkpoints 表;
-- 存的是**图状态**(消息、记忆、槽位、标记),服务于多轮推理,不直接给前端展示。
-
-### 8.2 业务会话链路(SessionManager)
-
-- **Redis**(`SESSION_EXPIRE_SECONDS=900`,15 分钟滑动过期):
-  - `agent:user:{uid}:session` → 当前活跃 session_id;
-  - `agent:session:{sid}` → 会话元数据;`agent:context:{sid}` → 消息缓存 list;
-- **MySQL**(`session` / `session_message` 表):`@async_db_save` 装饰器以**守护线程异步落库**,不阻塞请求;会话状态机 `active → frozen/closed`;
-- 接口:`/chat/message/save`(前端逐条上报)、`/chat/session/close`、`/chat/session/list`(分页历史)、`/chat/session/history`(React 回放);
-- **现状注意**:图内回复不会自动写入 `session_message`,依赖前端上报,两条链路可能存在不一致窗口。
-
----
-
-## 9. 已知限制与演进方向
-
-### 9.1 已知限制
-
-1. **`api/chat.py` 未设置外层 `recursion_limit`**:LangGraph 默认上限极高,极端路由循环靠 rights 守卫兜底,但仍建议显式 `config={"recursion_limit": 50}` 快速失败;
-2. ~~**symptom_agent 采集完成判定弱**~~ 已修复:`should_continue_collecting` 调用缺 `turn_count` 参数(必然 TypeError 走降级)与 `decision` 字段未参与分支判断两个问题已修复,采集收敛不再单纯依赖 3 轮硬上限;
-3. **MCP 四层超时未统一**:Nacos/连接/listTools/callTool 各自为政,rights 侧的 `wait_for` 15s 属临时补丁;
-4. **模糊预约表述路由召回不足**:supervisor 职责描述未覆盖"我想预约一下洁牙"这类模糊表述,可能被路由到 symptom_agent(职责描述扩充待拍板);
-5. **chit_chat / search_agent 未挂载**;`agent/checkpointer.py` 为空文件;
-6. **图单例**:lifespan 构建一次,任何节点代码改动需重启 uvicorn;
-7. **rights_memory 为弱类型 dict**(S4 计划 Pydantic 类型化);
-8. symptom/triage/education 尚无私有记忆(S3 同构迁移)。
-
-### 9.2 演进路线(已规划)
-
-| 阶段 | 内容 | 状态 |
-|---|---|---|
-| S1 | Supervisor 全局汇总记忆(滚动窗口+折叠摘要) | ✅ 已交付并 e2e 验证 |
-| S2 | rights 私有记忆(镜像+私有摘要+槽位状态机入记忆) | ✅ 已交付并 e2e 验证 |
-| S3 | symptom/education/triage 同构私有化 | 待启动 |
-| S4 | `rights_memory` Pydantic 类型化(state schema 强约束) | 待启动 |
-| - | MCP 统一四层超时、外层 recursion_limit、路由职责描述扩充 | 待拍板/实施 |
-
-### 9.3 部署与运行
-
-```bash
-# 依赖:Nacos(8848)、MCP Server(SpringAI, 注册名 spring-ai-mcp-server, SSE /sse)、
-#       MySQL(chatte 库, checkpoints 表首次需 checkpointer.setup())、Redis(6379)、Chroma 持久目录
-
-python -m uvicorn main:app --reload --port 8000
-# 调试 MCP 链路: python tools/mcp.py  (Nacos→SSE→listTools→callTool 全链路演示)
-```
-
-环境变量(GLM 接入、Nacos、MySQL、Redis、DASHSCOPE 向量、Chroma 路径等)统一由 `.env` 提供,`load_dotenv()` 加载。
