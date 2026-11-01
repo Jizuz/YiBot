@@ -16,7 +16,7 @@
 | T6 | ✅[测试+实现] Redis 异步客户端：`data/redis_client.py`（redis.asyncio 单例，lifespan 装配 app.state）；fakeredis 单测连接生命周期 | production-hardening | P1 | 2h | data/redis_client.py + 单测 | T4 |
 | T7 | ✅[测试+实现] JWT 核心：`core/security.py`——双令牌签发/校验链（签名/exp/type/黑名单/disabled）、bcrypt、refresh 白名单原子轮换（GETDEL）、独立双密钥 | access-auth | P1 | 5h | core/security.py + `tests/core/test_security.py`（全场景矩阵） | T4, T6 |
 | T8 | ✅[测试+实现] 密码迁移：user_repository 哈希读改 + 登录惰性升级（条件更新防并发双写）+ 新注册只写哈希 | security-hardening | P1 | 3h | repo 改造 + `tests/data/test_password_migration.py` | T7 |
-| T9 | [测试+实现] 鉴权接口：`api/routes/auth.py`——login（登录即注册/凭据错误不区分存在性/Redis 白名单写失败降级）、refresh 轮换、logout 吊销；旧接口 `/user/detail/mobile`、`/user/add` 脱敏（响应剔除 password/hash_pwd） | access-auth | P1 | 4h | routes/auth.py + TestClient 集成测试 | T7, T8, T5 |
+| T9 | ✅[测试+实现] 鉴权接口：`api/routes/auth.py`——login（登录即注册/凭据错误不区分存在性/Redis 白名单写失败降级）、refresh 轮换、logout 吊销；旧接口 `/user/detail/mobile`、`/user/add` 脱敏（响应剔除 password/hash_pwd） | access-auth | P1 | 4h | routes/auth.py + TestClient 集成测试 | T7, T8, T5 |
 | T10 | [测试+实现] 路由接入鉴权：`api/deps/auth.py` get_current_user；`/chat/*`、`/rag/*` 全量注入；user_id 改取令牌（保留 uid 数值转换与 thread_id 格式）；query 兼容通道（放行+告警日志）；`AUTH_ENABLED` 开关 | access-auth | P1 | 4h | deps/auth.py + 路由改造 + 兼容通道测试 | T9 |
 | T11 | [测试+实现] 前端请求层：Chatte `src/api/http.ts` authFetch（Bearer 注入 / 401 单飞续期 / 重放一次 / 失败登出）+ `tokenStore.ts`（access 内存 + refresh localStorage `chatte-refresh`）+ `src/api/auth.ts` 四接口 | access-auth | P1 | 4h | 前端 api 层 + 续期重放测试 | T9（联调可后置） |
 | T12 | [实现] 前端登录态迁移：`useAuth.ts` 改走 /user/login（响应无密码）；启动静默续期；登出调服务端 + 清理旧键 `chatte-auth`；删除 `api/user.ts` 伪登录链路；`config/index.ts` api 地址更新 | access-auth | P1 | 3h | 前端登录流改造 | T11 |

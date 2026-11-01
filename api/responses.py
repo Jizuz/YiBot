@@ -37,6 +37,26 @@ class BIZ_CODE:
     INTERNAL_ERROR = 50000
 
 
+def _biz_to_http(code: int) -> int:
+    if code == BIZ_CODE.OK:
+        return 200
+    if BIZ_CODE.UNAUTHORIZED <= code < 40200:
+        return 401
+    if BIZ_CODE.QUOTA_EXCEEDED <= code < 43000:
+        return 429
+    return 400
+
+
+class BizError(Exception):
+    """携带精确业务码的业务异常（区别于裸 HTTPException 的粗映射）。"""
+
+    def __init__(self, code: int, msg: str, status_code: int | None = None):
+        super().__init__(msg)
+        self.code = code
+        self.msg = msg
+        self.status_code = status_code or _biz_to_http(code)
+
+
 _HTTP_STATUS_TO_BIZ = {
     401: BIZ_CODE.TOKEN_INVALID,
     403: BIZ_CODE.TOKEN_INVALID,
@@ -81,6 +101,13 @@ class TraceIdMiddleware(BaseHTTPMiddleware):
 
 def register_exception_handlers(app: FastAPI) -> None:
     """注册全局异常兜底：HTTPException 按状态映射业务码；未知异常脱敏。"""
+
+    @app.exception_handler(BizError)
+    async def on_biz_error(request: Request, exc: BizError):
+        return JSONResponse(
+            status_code=exc.status_code,
+            content=_payload(exc.code, exc.msg, None),
+        )
 
     @app.exception_handler(HTTPException)
     async def on_http_exception(request: Request, exc: HTTPException):

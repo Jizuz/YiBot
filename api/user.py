@@ -7,6 +7,14 @@ from schemas import user_schema
 
 router = APIRouter(prefix="/user", tags=["用户管理"])
 
+# 过渡期脱敏：旧伪登录接口响应禁止携带任何密码字段（spec: access-auth）
+_SAFE_FIELDS = ("id", "name", "full_name", "mobile", "email", "disabled",
+                "gmt_create", "gmt_update", "is_delete", "version")
+
+
+def _sanitize(user) -> dict:
+    return {key: getattr(user, key, None) for key in _SAFE_FIELDS}
+
 def get_db():
     try:
         db = SessionLocal()
@@ -14,7 +22,7 @@ def get_db():
     finally:
         db.close()
 
-@router.post("/add", response_model=user_schema.UserBase)
+@router.post("/add")
 def add_user(user: user_schema.UserCreate, db: Session = Depends(get_db)):
     if not user.mobile:
         raise HTTPException(status_code=400, detail="手机号输入异常")
@@ -25,16 +33,18 @@ def add_user(user: user_schema.UserCreate, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail="手机号已经被注册")
 
     db_user = user_repository.create_user(db, user)
-    print(f"user add_user success, db_user: {db_user.__repr__}")
     db_user = user_repository.query_user_by_mobile(db, user.mobile)
-    return db_user
+    return _sanitize(db_user)
 
 @router.get("/detail/mobile")
 def query_by_mobile(mobile: str, db: Session = Depends(get_db)):
     if not mobile:
         raise HTTPException(status_code=400, detail="查询异常")
-    
-    return user_repository.query_user_by_mobile(db, mobile)
+
+    user = user_repository.query_user_by_mobile(db, mobile)
+    if user is None:
+        return None
+    return _sanitize(user)
 
 @router.post("/delete/{mobile}")
 def delete_by_mobile(mobile: str, db: Session = Depends(get_db)):
@@ -43,5 +53,5 @@ def delete_by_mobile(mobile: str, db: Session = Depends(get_db)):
 
     try:
         return user_repository.delete_by_id(db, mobile)
-    except Exception:
+    except ValueError:
         raise HTTPException(status_code=500, detail="删除失败")

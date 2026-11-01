@@ -106,6 +106,18 @@ def _decode(token: str, expected_type: str) -> dict:
     return payload
 
 
+def issue_access_only(uid: int | str, mobile: str, role: str) -> str:
+    """仅签发 access（Redis 白名单写失败时的登录降级路径，不触碰 Redis）。"""
+    access_secret, _ = _require_secrets()
+    settings = get_settings()
+    token, _, _ = _issue(
+        TOKEN_TYPE_ACCESS, access_secret,
+        settings.JWT_ACCESS_TTL_MIN * 60,
+        uid=uid, mobile=mobile, role=role,
+    )
+    return token
+
+
 async def issue_token_pair(
     uid: int | str,
     mobile: str,
