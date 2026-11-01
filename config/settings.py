@@ -31,6 +31,8 @@ class Settings(BaseSettings):
     JWT_ACCESS_TTL_MIN: int = 30
     JWT_REFRESH_TTL_DAYS: int = 7
     AUTH_ENABLED: bool = True
+    # 过渡期 query user_id 兼容通道（前端切换验收 + 一个发布周期后置 False 下线）
+    AUTH_LEGACY_QUERY_COMPAT: bool = True
 
     # ---- LLM 配额（P2）----
     LLM_DAILY_TOKEN_QUOTA: int = 50000
