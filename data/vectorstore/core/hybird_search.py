@@ -1,8 +1,10 @@
+import logging
 import os
 from dotenv import load_dotenv
 
 from data.vectorstore.core.vector_search import vector_search
 from data.vectorstore.core.bm25_search import bm25_engine
+logger = logging.getLogger("data.vectorstore.core.hybird_search")
 
 load_dotenv()
 
@@ -10,12 +12,12 @@ VECTOR_WEIGHT = float(os.getenv("VECTOR_WEIGHT"))
 BM25_WEIGHT = float(os.getenv("BM25_WEIGHT"))
 
 def hybird_search(query: str, top_k: int = 5):
-    print(f"==========> hybird search start, query: {query} ...")
+    logger.info(f"==========> hybird search start, query: {query} ...")
     # 两路召回
     vec_res = vector_search(query, top_k=10)
-    # print(f"==========> hybird vector result: {vec_res}")
+    # logger.info(f"==========> hybird vector result: {vec_res}")
     bm25_res = bm25_engine.search(query, top_k=10)
-    # print(f"==========> hybird bm25 result: {vec_res}")
+    # logger.info(f"==========> hybird bm25 result: {vec_res}")
 
     # 得分归一化
     all_docs = {}

@@ -13,6 +13,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
+from core.biz_codes import BIZ_CODE  # noqa: F401 - 统一业务码下沉 core
 from core.logging import (
     get_trace_id,
     new_trace_id,
@@ -21,20 +22,6 @@ from core.logging import (
 )
 
 logger = logging.getLogger("yibot.api")
-
-
-class BIZ_CODE:
-    OK = 0
-    # 鉴权段 40100-40199
-    UNAUTHORIZED = 40101      # 未登录
-    TOKEN_EXPIRED = 40102     # 令牌过期
-    TOKEN_INVALID = 40103     # 令牌无效（含篡改/类型错误/已轮换）
-    TOKEN_REVOKED = 40104     # 已吊销
-    BAD_CREDENTIALS = 40105   # 手机号或密码错误
-    # 配额段 42900-42999
-    QUOTA_EXCEEDED = 42901    # 当日额度用尽
-    # 系统段
-    INTERNAL_ERROR = 50000
 
 
 def _biz_to_http(code: int) -> int:

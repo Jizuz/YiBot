@@ -57,7 +57,7 @@ class SessionRepository:
     @staticmethod
     def update_session_status(session_id: str, status: str):
         """更新会话状态：active/frozen/closed"""
-        print(f"session status update, session_id: {session_id}, status: {status}")
+        logger.info(f"session status update, session_id: {session_id}, status: {status}")
         db = next(get_db_session())
         try:
             session_obj = db.query(Session).filter(Session.session_id == session_id).first()

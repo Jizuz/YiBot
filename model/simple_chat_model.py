@@ -1,6 +1,6 @@
 from langchain_openai import ChatOpenAI
 
-from llm.base_llm import chat_model
+from model.provider import chat_model
 
 model = chat_model()
 

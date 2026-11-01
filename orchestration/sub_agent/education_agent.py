@@ -1,3 +1,4 @@
+import logging
 import asyncio
 import re
 
@@ -11,6 +12,7 @@ from data.vectorstore.core.hybird import format_retrieved_context
 from data.vectorstore.core.hybird import HybridRetriever as retriever
 from tools.mcp import MCP_TIMEOUT, TOOL_SEARCH_KNOWLEDGE_BASE, get_mcp_tool_by_name
 from orchestration.prompts.education import EDUCATION_PROMPT, KB_GROUP_ANALYSIS_PROMPT
+logger = logging.getLogger("orchestration.sub_agent.education_agent")
 
 model = _get_model()
 
@@ -76,13 +78,13 @@ async def _analyze_kb_group(state: ConsultState) -> str | None:
             *state["messages"],
         ])
     except (Exception, asyncio.CancelledError):
-        print("警告：知识库分组分析失败,检索时不过滤分组")
+        logger.info("警告：知识库分组分析失败,检索时不过滤分组")
         return None
     doc_group = getattr(plan, "doc_group", None)
     if doc_group in (None, "", "unknown"):
-        print(f"ℹ️ 知识库分组未明确判定({getattr(plan, 'reason', '') or '未给出理由'}),检索全部分组")
+        logger.info(f"ℹ️ 知识库分组未明确判定({getattr(plan, 'reason', '') or '未给出理由'}),检索全部分组")
         return None
-    print(f"ℹ️ 知识库分组分析: {doc_group}({plan.reason})")
+    logger.info(f"ℹ️ 知识库分组分析: {doc_group}({plan.reason})")
     return doc_group
 
 
@@ -96,7 +98,7 @@ async def _search_kb_via_mcp(query: str, doc_group: str | None = None) -> str | 
     try:
         tool = await asyncio.wait_for(get_mcp_tool_by_name(TOOL_SEARCH_KNOWLEDGE_BASE), timeout=15.0)
     except (Exception, asyncio.CancelledError):
-        print("警告：MCP search_knowledge_base 获取失败/超时")
+        logger.info("警告：MCP search_knowledge_base 获取失败/超时")
         return None
     if tool is None:
         return None
@@ -104,7 +106,7 @@ async def _search_kb_via_mcp(query: str, doc_group: str | None = None) -> str | 
     group_arg = _kb_group_arg_name(tool)
     # 分组白名单校验: 入组仅限服务端枚举值,非法值一律不传分组
     if doc_group and doc_group not in KB_DOC_GROUPS:
-        print(f"⚠️ 非法知识库分组 {doc_group}(入组仅限 {'/'.join(sorted(KB_DOC_GROUPS))}),已忽略分组过滤")
+        logger.info(f"⚠️ 非法知识库分组 {doc_group}(入组仅限 {'/'.join(sorted(KB_DOC_GROUPS))}),已忽略分组过滤")
         doc_group = None
 
     async def _invoke(group: str | None) -> str | None:
@@ -114,14 +116,14 @@ async def _search_kb_via_mcp(query: str, doc_group: str | None = None) -> str | 
         try:
             text = await asyncio.wait_for(tool.ainvoke(args), timeout=MCP_TIMEOUT)
         except (Exception, asyncio.CancelledError):
-            print("警告：MCP search_knowledge_base 调用失败/超时")
+            logger.info("警告：MCP search_knowledge_base 调用失败/超时")
             return None
         return str(text or "").strip()
 
     text = await _invoke(doc_group)
     if doc_group and (not text or KB_NO_RESULT_MARK in text):
         # 分组过滤后无命中: 退回全分组重检一次,保留原结果兜底
-        print(f"ℹ️ 分组 {doc_group} 检索无结果,退回全部分组重检")
+        logger.info(f"ℹ️ 分组 {doc_group} 检索无结果,退回全部分组重检")
         text = await _invoke(None) or text
     return text or None
 
@@ -181,13 +183,13 @@ async def education_agent_node(state: ConsultState) -> Command:
     doc_group = await _analyze_kb_group(state)
     context = await _search_kb_via_mcp(query, doc_group=doc_group)
     if context:
-        print(f"✅ education 检索命中 MCP search_knowledge_base(分组: {doc_group or '全部'})")
+        logger.info(f"✅ education 检索命中 MCP search_knowledge_base(分组: {doc_group or '全部'})")
     else:
-        print("ℹ️ education 使用本地 RAG 检索(MCP search_knowledge_base 不可用)")
+        logger.info("ℹ️ education 使用本地 RAG 检索(MCP search_knowledge_base 不可用)")
         docs = retriever.retrieve(query, k=5)
         if not docs:
             # 检索资料未覆盖: 不让 LLM 凭空生成, 转症状采集->分诊链路
-            print("ℹ️ education 检索未覆盖该问题, 转症状采集->分诊链路")
+            logger.info("ℹ️ education 检索未覆盖该问题, 转症状采集->分诊链路")
             return _handoff_to_symptom(HANDOFF_NO_COVER_MSG)
         context = format_retrieved_context(docs)
 

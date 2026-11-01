@@ -5,7 +5,7 @@
 - 各 Agent 文件统一 `model = get_orch_model()`，node 函数体零改动。
 """
 
-from llm.base_llm import chat_model
+from model.provider import chat_model
 
 _instances: dict[str, object] = {}
 

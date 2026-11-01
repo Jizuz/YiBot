@@ -1,3 +1,4 @@
+import logging
 from langchain.agents import create_agent
 from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.graph import MessagesState
@@ -6,24 +7,25 @@ from orchestration.model_provider import get_orch_model as _get_model
 from orchestration.prompts.chit_chat import CHIT_CHAT_PROMPT
 from tools.custom_tools import *
 from tools.mcp import *
+logger = logging.getLogger("orchestration.sub_agent.chit_chat_agent")
 
 model = _get_model()
 
 async def chit_chat(state: MessagesState) -> dict:
     last_msg = state["messages"][-1].content
-    print(f"=== chit chat Agent start, question: {last_msg} ===")
+    logger.info(f"=== chit chat Agent start, question: {last_msg} ===")
 
     # 获取MCP工具列表: Nacos 服务发现 -> SSE 长连接 -> listTools(异步直取,无需事件循环桥接)
     mcp_tools = await get_mcp_tools()
 
     # 检查 mcp_tools 是否为列表
     if not isinstance(mcp_tools, list):
-        print(f"警告：MCP工具获取失败，收到类型: {type(mcp_tools)}, 内容: {mcp_tools}")
+        logger.info(f"警告：MCP工具获取失败，收到类型: {type(mcp_tools)}, 内容: {mcp_tools}")
         mcp_tools = []
 
     # 检查工具列表是否为空
     if not mcp_tools:
-        print("警告：没有可用的MCP工具，将使用基本模式运行")
+        logger.info("警告：没有可用的MCP工具，将使用基本模式运行")
         mcp_tools = []
 
     agent = create_agent(
@@ -35,7 +37,7 @@ async def chit_chat(state: MessagesState) -> dict:
     user_msg = HumanMessage(content=last_msg)
     response = await agent.ainvoke({"messages": user_msg})
 
-    print(f"=======> chit_chat response: {str(response)}")
+    logger.info(f"=======> chit_chat response: {str(response)}")
     if not response or not response["messages"]:
         return {"messages": [AIMessage(content="对不起，暂时无法回答你的问题")]}
 
@@ -51,5 +53,5 @@ async def chit_chat(state: MessagesState) -> dict:
     else:
         ai_msg = ai_response.content
 
-    print("=== chit chat Agent end ===")
+    logger.info("=== chit chat Agent end ===")
     return {"messages": [{"role": "assistant", "content": ai_msg}]}

@@ -1,3 +1,4 @@
+import logging
 import asyncio
 import json
 from datetime import date
@@ -17,6 +18,7 @@ from orchestration.struct.schemas import AppointingTurn, RightMatch, RightsInten
 from orchestration.model_provider import get_orch_model as _get_model
 from tools.mcp import get_mcp_tools
 from orchestration.prompts.rights import RIGHTS_PROMPT, RIGHTS_INTENT_PROMPT, APPOINTING_TURN_PROMPT, RIGHT_MATCH_PROMPT
+logger = logging.getLogger("orchestration.sub_agent.rights_agent")
 
 model = _get_model()
 
@@ -122,7 +124,7 @@ async def _fold_mirror(mem: dict) -> None:
     head, tail = msgs[:-PRIVATE_KEEP_TAIL], msgs[-PRIVATE_KEEP_TAIL:]
     new_summary = await fold_messages(model, head, mem.get("summary"))
     if new_summary is None:
-        print("警告：rights 私有记忆摘要失败，降级直接丢弃较旧消息")
+        logger.info("警告：rights 私有记忆摘要失败，降级直接丢弃较旧消息")
     else:
         mem["summary"] = new_summary
     mem["messages"] = tail
@@ -154,7 +156,7 @@ async def _get_tools_safe() -> list:
     try:
         tools = await asyncio.wait_for(get_mcp_tools(), timeout=15.0)
     except (Exception, asyncio.CancelledError):
-        print("警告：MCP 连接失败/超时")
+        logger.info("警告：MCP 连接失败/超时")
         tools = []
     return tools if isinstance(tools, list) else []
 
@@ -212,10 +214,10 @@ async def _appointing_flow(state: ConsultState, mem: dict, appointing: dict) -> 
     turn = await _appointing_extract(mem, appointing)
 
     if turn.intent == "cancel":
-        print("=== rights Agent 预约流程：用户取消 ===")
+        logger.info("=== rights Agent 预约流程：用户取消 ===")
         return _appointing_finish(mem, APPOINTING_CANCEL_MSG)
     if turn.intent == "other":
-        print("=== rights Agent 预约流程：本轮与预约无关，回落查询流程 ===")
+        logger.info("=== rights Agent 预约流程：本轮与预约无关，回落查询流程 ===")
         return None
 
     appointing = _merge_slots(dict(appointing), turn)
@@ -251,7 +253,7 @@ async def _appointing_collect(state: ConsultState, mem: dict, appointing: dict, 
     # 返回无权益条目特征(如 mock Server 仅回状态文本)时, 视为未查到, 委婉终止
     if not rights_text or ("rightId" not in rights_text and "{" not in rights_text and "[" not in rights_text):
         return _appointing_finish(mem, "很抱歉，暂时没能查到您的权益信息，本次先不为您预约啦，请稍后再试～")
-    print(f"=== rights Agent 预约流程：权益列表返回: {rights_text[:200]} ===")
+    logger.info(f"=== rights Agent 预约流程：权益列表返回: {rights_text[:200]} ===")
 
     last_reply = next(
         (m.content for m in reversed(mem.get("messages") or []) if getattr(m, "type", "") == "human"),
@@ -269,7 +271,7 @@ async def _appointing_collect(state: ConsultState, mem: dict, appointing: dict, 
         # 连续两次仍无法确定意向权益: 委婉终止, 避免反复重试同一问题
         fails = appointing.get("match_fails", 0) + 1
         if fails >= 2:
-            print("=== rights Agent 预约流程：多次无法确定意向权益，委婉终止 ===")
+            logger.info("=== rights Agent 预约流程：多次无法确定意向权益，委婉终止 ===")
             return _appointing_finish(mem, "抱歉，几次都没能确定您想使用哪项权益，本次就先不为您预约啦～您可以先查一下自己名下的权益名称，再来找我办理，感谢理解！")
         appointing["match_fails"] = fails
         # 无法唯一确定：列出权益请用户选择（回复序号或名称均可）
@@ -277,10 +279,10 @@ async def _appointing_collect(state: ConsultState, mem: dict, appointing: dict, 
         return _appointing_ask(mem, f"为您查到以下权益，请问您想使用哪一项呢？（直接回复序号或权益名称即可）\n{rights_disp}")
     appointing.pop("match_fails", None)
     appointing["right_id"] = right_id
-    print(f"=== rights Agent 预约流程：匹配权益 rightId={right_id} ===")
+    logger.info(f"=== rights Agent 预约流程：匹配权益 rightId={right_id} ===")
 
     valid_text = await _call_mcp(tools, "valid_right", {"rightId": right_id})
-    print(f"=== rights Agent 预约流程：valid_right 返回: {valid_text} ===")
+    logger.info(f"=== rights Agent 预约流程：valid_right 返回: {valid_text} ===")
     if not _valid_passed(valid_text):
         return _appointing_finish(mem, APPOINTING_VALID_FAIL_MSG)
 
@@ -323,7 +325,7 @@ async def _appointing_choose_store(mem: dict, appointing: dict) -> Command:
         "rightId": appointing.get("right_id"),
         "userName": appointing.get("user_name"),
     }})
-    print(f"=== rights Agent 预约流程：appoint_service 返回: {result_text} ===")
+    logger.info(f"=== rights Agent 预约流程：appoint_service 返回: {result_text} ===")
 
     outcome = _appoint_outcome(result_text)
     if outcome == "fail":
@@ -340,7 +342,7 @@ async def _appointing_choose_store(mem: dict, appointing: dict) -> Command:
 async def rights_agent_node(state: ConsultState) -> Command:
     """权益 Agent：基于 MCP 工具处理权益查询 / 使用 / 附近门店等诉求。"""
     last_msg = state["messages"][-1].content
-    print(f"=== rights Agent start, question: {last_msg} ===")
+    logger.info(f"=== rights Agent start, question: {last_msg} ===")
 
     # 私有记忆维护: 补进本轮新用户消息(主信箱尾部) -> 折叠超限头部
     mem = _sync_mirror(_init_mem(state), state)
@@ -356,7 +358,7 @@ async def rights_agent_node(state: ConsultState) -> Command:
         and isinstance(msgs[-1], AIMessage)
         and not getattr(msgs[-1], "tool_calls", None)
     ):
-        print("=== rights Agent 守卫触发: 无新用户输入的重复路由, 跳过查询直接收尾 ===")
+        logger.info("=== rights Agent 守卫触发: 无新用户输入的重复路由, 跳过查询直接收尾 ===")
         return Command(
             goto="final_response",
             update={"active_agent": None, "rights_memory": mem},
@@ -375,7 +377,7 @@ async def rights_agent_node(state: ConsultState) -> Command:
         *(mem.get("messages") or [])[-6:],
     ])
     if intent and intent.intent == "appointing":
-        print("=== rights Agent 进入预约流程 ===")
+        logger.info("=== rights Agent 进入预约流程 ===")
         mem["appointing"] = {"stage": "collect"}
         result = await _appointing_flow(state, mem, mem["appointing"])
         if result is not None:
@@ -386,7 +388,7 @@ async def rights_agent_node(state: ConsultState) -> Command:
     if not isinstance(mcp_tools, list):
         mcp_tools = []
     if not mcp_tools:
-        print("警告：没有可用的 MCP 工具，权益服务降级")
+        logger.info("警告：没有可用的 MCP 工具，权益服务降级")
         mem["answered"] = True
         return _rights_emit(
             mem, AIMessage(content="抱歉，权益服务暂时不可用，请稍后再试。"),
@@ -423,7 +425,7 @@ async def rights_agent_node(state: ConsultState) -> Command:
         config={"recursion_limit": 10},
     )
 
-    print(f"=======> rights response: {str(response)}")
+    logger.info(f"=======> rights response: {str(response)}")
     ai_response = response["messages"][-1] if response and response["messages"] else None
     mem["answered"] = True
     if not ai_response or not ai_response.content:
@@ -432,7 +434,7 @@ async def rights_agent_node(state: ConsultState) -> Command:
             "supervisor", {"active_agent": None},
         )
 
-    print("=== rights Agent end ===")
+    logger.info("=== rights Agent end ===")
     return _rights_emit(
         mem, AIMessage(content=ai_response.content), "supervisor", {"active_agent": None},
     )

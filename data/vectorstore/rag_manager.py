@@ -1,3 +1,4 @@
+import logging
 import time
 import os
 
@@ -8,6 +9,7 @@ from data.vectorstore.chroma.metadata import exist_doc, delete_doc, generate_id
 from data.vectorstore.core.bm25_search import bm25_engine
 from data.vectorstore.loader.file_loader import load_file
 from data.vectorstore.loader.web_loader import load_web
+logger = logging.getLogger("data.vectorstore.rag_manager")
 
 async def upload(file: UploadFile = File(...), desc: str = Form("")):
     """上传文件"""
@@ -59,9 +61,9 @@ async def save_web_info(url: str):
     chunks = split_text(content, int(os.getenv("CHUNK_SIZE")), int(os.getenv("CHUNK_OVERLAP")))
     if not chunks:
         return {"code": 400, "msg": "文件切分失败", "data": {}}
-    print(f"==========> web_save split chunks before length: {len(chunks)}, chunks_info: {chunks}")
+    logger.info(f"==========> web_save split chunks before length: {len(chunks)}, chunks_info: {chunks}")
     chunks = chunks[:10]
-    print(f"==========> web_save split chunks after length: {len(chunks)}, chunks_info: {chunks}")
+    logger.info(f"==========> web_save split chunks after length: {len(chunks)}, chunks_info: {chunks}")
 
     doc_id = generate_id()
     meta_list = [{

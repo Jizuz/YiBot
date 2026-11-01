@@ -9,7 +9,7 @@ from api.deps.auth import get_current_user
 from api.responses import BIZ_CODE, BizError
 from config.settings import get_settings
 from core import quota
-from llm.simple_chat_model import get_ai_response
+from model.simple_chat_model import get_ai_response
 from data.session_manager import SessionManager
 from model.callbacks.token_meter import reset_meter_uid, set_meter_uid
 from starlette.concurrency import run_in_threadpool
@@ -121,7 +121,10 @@ async def common_ask_agent(
     graph = request.app.state.graph
     # thread_id 与 Checkpointer 存量数据绑定：格式 user-{uid}-{sid} 不可变更
     thread_id = f"user-{uid}-{session_id}"
-    config = {"configurable": {"thread_id": thread_id}}
+    config = {
+        "configurable": {"thread_id": thread_id},
+        "recursion_limit": settings.ORCH_RECURSION_LIMIT,  # 防失控循环（spec）
+    }
     meter_token = set_meter_uid(uid)  # 全链路 LLM 调用计量身份
     try:
         result = await graph.ainvoke(

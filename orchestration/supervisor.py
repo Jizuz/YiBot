@@ -1,3 +1,4 @@
+import logging
 from langchain_core.messages import AIMessage, RemoveMessage, SystemMessage
 
 from langgraph.graph import StateGraph, START, END, MessagesState
@@ -13,6 +14,7 @@ from orchestration.sub_agent.triage_agent import triage_agent_node
 from orchestration.model_provider import get_orch_model as _get_model
 from tools.custom_tools import *
 from orchestration.prompts.supervisor import SUPERVISOR_PROMPT
+logger = logging.getLogger("orchestration.supervisor")
 
 model = _get_model()
 
@@ -31,9 +33,9 @@ async def _maintain_global_memory(state: ConsultState) -> dict | None:
         return None  # 存在无 id 消息无法 Remove, 降级跳过
     new_summary = await fold_messages(model, fold_part, state.get("global_summary"))
     if new_summary is None:
-        print("警告：全局记忆折叠失败，本轮跳过")
+        logger.info("警告：全局记忆折叠失败，本轮跳过")
         return None
-    print(f"=== Supervisor 全局记忆折叠：{len(fold_part)} 条旧消息 -> global_summary（保留最近 {len(keep)} 条） ===")
+    logger.info(f"=== Supervisor 全局记忆折叠：{len(fold_part)} 条旧消息 -> global_summary（保留最近 {len(keep)} 条） ===")
     return {"messages": [RemoveMessage(id=m.id) for m in fold_part], "global_summary": new_summary}
 
 
@@ -155,5 +157,5 @@ def build_graph(checkpointer):
 #     if not result:
 #         return "无法回答您的问题"
 
-#     print(f"图调用结果: {result}")
+#     logger.info(f"图调用结果: {result}")
 #     return result["messages"][-1].content

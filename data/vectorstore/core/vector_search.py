@@ -1,7 +1,9 @@
+import logging
 import os
 from dotenv import load_dotenv
 
 from data.vectorstore.chroma.chroma_client import chroma_db
+logger = logging.getLogger("data.vectorstore.core.vector_search")
 
 def vector_search(query: str, top_k: int = 5):
     """向量相似度查询"""
@@ -9,7 +11,7 @@ def vector_search(query: str, top_k: int = 5):
     # retriver = chroma_db.as_retriever(search_type="similarity", search_kwargs={"k": top_k})
     # results = retriver.invoke(query)
     results = chroma_db.similarity_search_with_relevance_scores(query, top_k)
-    print(f"===========> vector_search query: {query}, result: {results}")
+    logger.info(f"===========> vector_search query: {query}, result: {results}")
     if not results:
         return []
 

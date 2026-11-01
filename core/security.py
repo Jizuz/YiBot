@@ -14,7 +14,7 @@ import uuid
 import bcrypt
 import jwt as pyjwt
 
-from api.responses import BIZ_CODE
+from core.biz_codes import BIZ_CODE
 from config.settings import get_settings
 
 logger = logging.getLogger("yibot.core.security")

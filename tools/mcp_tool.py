@@ -1,3 +1,4 @@
+import logging
 import os
 
 import requests
@@ -5,6 +6,7 @@ from typing import Annotated
 
 from mcp.server.fastmcp import FastMCP
 from pydantic import Field
+logger = logging.getLogger("tools.mcp_tool")
 
 mcp = FastMCP("local_mcp")
 
@@ -53,7 +55,7 @@ async def get_weather(city: Annotated[str, Field(description="目标城市名称
 
         live_data = data["lives"][0]
 
-        print("city_weather execute!")
+        logger.info("city_weather execute!")
 
         # 格式化返回
         return (

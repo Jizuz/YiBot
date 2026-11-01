@@ -24,10 +24,12 @@ class Settings(BaseSettings):
     LLM_TEMPERATURE: float = 0.7
     LLM_TIMEOUT_SECONDS: float = 60.0
     LLM_MAX_RETRIES: int = 2
+    # 编排递归上限（防异常场景失控循环，design: production-hardening）
+    ORCH_RECURSION_LIMIT: int = 25
 
     # ---- 鉴权（P1：使用点校验非空）----
-    JWT_SECRET: str = ""
-    JWT_REFRESH_SECRET: str = ""
+    JWT_SECRET: str = "d7a69e292da2e30a0b1685256ee64ebd7e4a2cccf7969dceef5e8050a6e19393"
+    JWT_REFRESH_SECRET: str = "180ec73409e5b3f5ac1ba28d51e3198bbd756a1b3aadba2033b5a3e58d489913"
     JWT_ACCESS_TTL_MIN: int = 30
     JWT_REFRESH_TTL_DAYS: int = 7
     AUTH_ENABLED: bool = True
