@@ -13,7 +13,7 @@
 | T3 | ✅[实现] 工程卫生：`vector_db/` 出 git（.gitignore + rm --cached）；删空文件 `agent/checkpointer.py`、空目录 `utils/`；`test_mcp.py` → `scripts/` | security-hardening | P0 | 1h | git 状态清理提交 | — |
 | T4 | ✅[测试+实现] 配置集中：`config/settings.py`（pydantic-settings，兼容旧变量名，含 JWT/配额/AMAP/模型参数）；测试先覆盖加载/默认值/缺失报错 | production-hardening | P0 | 3h | `config/settings.py` + `tests/config/test_settings.py` | — |
 | T5 | ✅[测试+实现] 横切底座：`core/logging.py`（结构化 JSON + trace_id contextvar + 脱敏过滤）+ trace 中间件；`api/responses.py` 统一响应/全局异常 handler + 业务码 | production-hardening | P1 | 4h | core/logging + api/responses + 单测 | T4 |
-| T6 | [测试+实现] Redis 异步客户端：`data/redis_client.py`（redis.asyncio 单例，lifespan 装配 app.state）；fakeredis 单测连接生命周期 | production-hardening | P1 | 2h | data/redis_client.py + 单测 | T4 |
+| T6 | ✅[测试+实现] Redis 异步客户端：`data/redis_client.py`（redis.asyncio 单例，lifespan 装配 app.state）；fakeredis 单测连接生命周期 | production-hardening | P1 | 2h | data/redis_client.py + 单测 | T4 |
 | T7 | [测试+实现] JWT 核心：`core/security.py`——双令牌签发/校验链（签名/exp/type/黑名单/disabled）、bcrypt、refresh 白名单原子轮换（GETDEL）、独立双密钥 | access-auth | P1 | 5h | core/security.py + `tests/core/test_security.py`（全场景矩阵） | T4, T6 |
 | T8 | [测试+实现] 密码迁移：user_repository 哈希读改 + 登录惰性升级（条件更新防并发双写）+ 新注册只写哈希 | security-hardening | P1 | 3h | repo 改造 + `tests/data/test_password_migration.py` | T7 |
 | T9 | [测试+实现] 鉴权接口：`api/routes/auth.py`——login（登录即注册/凭据错误不区分存在性/Redis 白名单写失败降级）、refresh 轮换、logout 吊销；旧接口 `/user/detail/mobile`、`/user/add` 脱敏（响应剔除 password/hash_pwd） | access-auth | P1 | 4h | routes/auth.py + TestClient 集成测试 | T7, T8, T5 |
