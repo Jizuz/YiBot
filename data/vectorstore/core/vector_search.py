@@ -1,7 +1,7 @@
 import os
 from dotenv import load_dotenv
 
-from rag.chroma.chroma_client import chroma_db
+from data.vectorstore.chroma.chroma_client import chroma_db
 
 def vector_search(query: str, top_k: int = 5):
     """向量相似度查询"""

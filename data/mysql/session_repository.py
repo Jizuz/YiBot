@@ -1,7 +1,10 @@
+import logging
 from datetime import datetime
 
-from database.conn import SessionLocal
-from database.models.session import Session, SessionMessage
+from data.mysql.conn import SessionLocal
+from data.mysql.models.session import Session, SessionMessage
+
+logger = logging.getLogger("yibot.data.session_repo")
 
 # 数据库会话工具
 def get_db_session():
@@ -108,8 +111,12 @@ class SessionRepository:
                 .limit(page_size)\
                 .all()
             return session_list
-        except Exception as e:
-            return []
+        except Exception:
+            logger.exception(
+                "get_session_list failed",
+                extra={"event": "session_list_fail", "user_id": str(user_id)},
+            )
+            raise
         finally:
             db.close()
 
@@ -123,8 +130,12 @@ class SessionRepository:
                         .order_by(SessionMessage.create_time.asc())\
                         .first()
             return message.content if message else None
-        except Exception as e:
-            return None
+        except Exception:
+            logger.exception(
+                "get_user_session_first_message failed",
+                extra={"event": "first_message_fail", "session_id": str(session_Id)},
+            )
+            raise
         finally:
             db.close()
 

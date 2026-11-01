@@ -1,8 +1,8 @@
 import os
 from dotenv import load_dotenv
 
-from rag.core.vector_search import vector_search
-from rag.core.bm25_search import bm25_engine
+from data.vectorstore.core.vector_search import vector_search
+from data.vectorstore.core.bm25_search import bm25_engine
 
 load_dotenv()
 

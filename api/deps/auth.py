@@ -14,7 +14,7 @@ from api.deps.db import get_db
 from api.responses import BIZ_CODE, BizError
 from core.security import SecurityError, verify_access
 from data.redis_client import get_redis
-from database import user_repository
+from data.mysql import user_repository
 
 logger = logging.getLogger("yibot.api.auth")
 

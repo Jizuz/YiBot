@@ -1,8 +1,8 @@
 from fastapi import APIRouter, Depends, File, UploadFile
 
 from api.deps.auth import get_current_user
-from manager import rag_manager
-from rag.core.hybird_search import hybird_search
+from data.vectorstore import rag_manager
+from data.vectorstore.core.hybird_search import hybird_search
 from schemas.rag_schema import WebSaveBody, RagSearchBody
 
 router = APIRouter(prefix="/rag", tags=["RAG管理"])

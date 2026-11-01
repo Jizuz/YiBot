@@ -9,9 +9,9 @@ from sqlalchemy import BigInteger, Integer, create_engine
 from sqlalchemy.orm import sessionmaker
 
 from core.security import hash_password, verify_password
-from database import user_repository as repo
-from database.conn import Base
-from database.models.user import User
+from data.mysql import user_repository as repo
+from data.mysql.conn import Base
+from data.mysql.models.user import User
 
 
 @pytest.fixture

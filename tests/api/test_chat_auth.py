@@ -20,9 +20,9 @@ from api.deps.db import get_db
 from api.deps.auth import get_current_user
 from api.responses import BIZ_CODE, TraceIdMiddleware, register_exception_handlers
 from core import security
-from database.conn import Base
-from database.models.session import Session
-from database.models.user import User
+from data.mysql.conn import Base
+from data.mysql.models.session import Session
+from data.mysql.models.user import User
 
 
 class FakeGraph:

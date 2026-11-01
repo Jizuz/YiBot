@@ -35,7 +35,7 @@ def _user_info(user) -> dict:
 @router.post("/login")
 async def login(body: LoginIn, request: Request, db=Depends(get_db)):
     """登录（登录即注册）：双令牌颁发；Redis 白名单写失败时降级仅发 access。"""
-    from database import user_repository
+    from data.mysql import user_repository
 
     user = user_repository.authenticate(db, body.mobile, body.password)
     if user is None:

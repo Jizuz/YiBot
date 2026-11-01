@@ -14,8 +14,8 @@ from sqlalchemy.pool import StaticPool
 from api.responses import BIZ_CODE, TraceIdMiddleware, register_exception_handlers
 from api.routes import auth as auth_routes
 from api.user import router as user_router
-from database.conn import Base
-from database.models.user import User
+from data.mysql.conn import Base
+from data.mysql.models.user import User
 
 
 @pytest.fixture

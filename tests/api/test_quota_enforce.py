@@ -24,8 +24,8 @@ from api.routes.auth import router as auth_router
 from core import quota
 from core import security
 from data.redis_client import close_redis, init_redis
-from database.conn import Base
-from database.models.user import User
+from data.mysql.conn import Base
+from data.mysql.models.user import User
 from model.callbacks.token_meter import TokenMeterCallbackHandler
 
 

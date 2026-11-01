@@ -3,11 +3,11 @@ import os
 
 from fastapi import File, Form, UploadFile
 
-from rag.chroma.chroma_client import chroma_db
-from rag.chroma.metadata import exist_doc, delete_doc, generate_id
-from rag.core.bm25_search import bm25_engine
-from rag.loader.file_loader import load_file
-from rag.loader.web_loader import load_web
+from data.vectorstore.chroma.chroma_client import chroma_db
+from data.vectorstore.chroma.metadata import exist_doc, delete_doc, generate_id
+from data.vectorstore.core.bm25_search import bm25_engine
+from data.vectorstore.loader.file_loader import load_file
+from data.vectorstore.loader.web_loader import load_web
 
 async def upload(file: UploadFile = File(...), desc: str = Form("")):
     """上传文件"""

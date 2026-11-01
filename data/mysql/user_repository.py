@@ -2,7 +2,7 @@ from sqlalchemy import update
 from sqlalchemy.orm import Session
 
 from core.security import hash_password, verify_password
-from database.models.user import User
+from data.mysql.models.user import User
 from schemas.user_schema import UserCreate
 
 def create_user(db: Session, user: UserCreate):

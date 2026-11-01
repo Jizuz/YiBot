@@ -10,19 +10,74 @@ from api.responses import BIZ_CODE, BizError
 from config.settings import get_settings
 from core import quota
 from llm.simple_chat_model import get_ai_response
-from manager.session_manager import SessionManager
+from data.session_manager import SessionManager
 from model.callbacks.token_meter import reset_meter_uid, set_meter_uid
+from starlette.concurrency import run_in_threadpool
 
 logger = logging.getLogger("yibot.api.chat")
 
 router = APIRouter(prefix="/chat", tags=["聊天管理"])
 
 
-def _assert_session_owner(session_id: str, uid) -> None:
-    """数据隔离（spec: access-auth 权限与数据隔离）：仅会话属主可访问。"""
+def _assert_session_owner_sync(session_id: str, uid) -> object | None:
+    """属主校验（同步，供 threadpool 调用）：返回会话信息或 None（非属主/不存在）。"""
     info = SessionManager.repo.get_session_info(session_id)
     if info is None or str(info.user_id) != str(uid):
+        return None
+    return info
+
+
+async def _assert_session_owner(session_id: str, uid) -> None:
+    """数据隔离（spec: access-auth 权限与数据隔离）：仅会话属主可访问。"""
+    info = await run_in_threadpool(_assert_session_owner_sync, session_id, uid)
+    if info is None:
         raise BizError(40404, "会话不存在", status_code=404)
+
+
+def _load_session_list_sync(user_id: str, page: int, page_size: int) -> dict:
+    """会话列表组装（同步，供 threadpool 调用；逻辑自原 SessionManager 平移）。"""
+    repo = SessionManager.repo
+    offset = (page - 1) * page_size
+    total = repo.count_session_list(user_id)
+    session_list = repo.get_session_list(user_id, offset, page_size)
+
+    records = []
+    for item in session_list:
+        message = repo.get_user_session_first_message(item.session_id)
+        records.append({
+            "sessionId": item.session_id,
+            "status": item.status,
+            "createTime": str(item.create_time),
+            "lastActiveTime": str(item.last_active_time),
+            "closeTime": str(item.close_time) if item.close_time else None,
+            "abstract": message if message else "---",
+        })
+
+    return {"total": total, "page": page, "pageSize": page_size, "records": records}
+
+
+def _load_playback_sync(session_id: str):
+    """会话回放数据（同步，供 threadpool 调用；逻辑自原 SessionManager 平移）。"""
+    repo = SessionManager.repo
+    info = repo.get_session_info(session_id)
+    if not info:
+        return None
+    msg_list = repo.get_session_message_list(session_id)
+    return {
+        "sessionInfo": {
+            "sessionId": info.session_id,
+            "status": info.status,
+            "createTime": str(info.create_time),
+        },
+        "messageList": [
+            {
+                "userContent": m.content if m.type == 0 else None,
+                "agentContent": m.content if m.type == 1 else None,
+                "createTime": str(m.create_time),
+            }
+            for m in msg_list
+        ],
+    }
 
 
 @router.get("/llm")
@@ -112,15 +167,15 @@ class SessionOperateReq(BaseModel):
 
 
 @router.post("/message/save")
-def save_chat_message(req: ChatMessageReq, current=Depends(get_current_user)):
+async def save_chat_message(req: ChatMessageReq, current=Depends(get_current_user)):
     """提交对话消息，自动缓存+异步落库"""
     uid = current["uid"]
     logger.info("chat message save", extra={"event": "message_save", "uid": uid})
     try:
         # 自动获取当前会话
-        session_id = SessionManager.get_or_create_session(str(uid))
+        session_id = await SessionManager.get_or_create_session(str(uid))
         # 保存消息
-        SessionManager.append_chat_message(session_id, req.type, req.content)
+        await SessionManager.append_chat_message(session_id, req.type, req.content)
         return {"code": 0, "msg": "success", "data": {"session_id": session_id}}
     except Exception as e:
         logger.exception("message save failed", extra={"event": "message_save_fail", "uid": uid})
@@ -128,15 +183,15 @@ def save_chat_message(req: ChatMessageReq, current=Depends(get_current_user)):
 
 
 @router.post("/session/close")
-def close_user_session(req: SessionOperateReq, current=Depends(get_current_user)):
+async def close_user_session(req: SessionOperateReq, current=Depends(get_current_user)):
     """主动关闭会话（清空缓存+更新数据库状态）——仅属主可关闭"""
     uid = current["uid"]
     if not req.session_id:
         return {"code": -1, "msg": "session_id不能为空", "data": None}
-    _assert_session_owner(req.session_id, uid)
+    await _assert_session_owner(req.session_id, uid)
     logger.info("chat session close", extra={"event": "session_close", "uid": uid})
     try:
-        SessionManager.close_session(req.session_id, str(uid))
+        await SessionManager.close_session(req.session_id, str(uid))
         return {"code": 0, "msg": "success", "data": None}
     except Exception as e:
         logger.exception("session close failed", extra={"event": "session_close_fail", "uid": uid})
@@ -144,7 +199,7 @@ def close_user_session(req: SessionOperateReq, current=Depends(get_current_user)
 
 
 @router.get("/session/list")
-def get_user_session_list_api(
+async def get_user_session_list_api(
     current=Depends(get_current_user),
     page: int = Query(1, description="页码"),
     page_size: int = Query(10, description="每页数量"),
@@ -158,7 +213,9 @@ def get_user_session_list_api(
     """
     uid = current["uid"]
     try:
-        res_data = SessionManager.get_user_session_list(str(uid), page, page_size)
+        res_data = await run_in_threadpool(
+            _load_session_list_sync, str(uid), page, page_size
+        )
         return {"code": 0, "msg": "success", "data": res_data}
     except Exception as e:
         logger.exception("session list failed", extra={"event": "session_list_fail", "uid": uid})
@@ -166,14 +223,14 @@ def get_user_session_list_api(
 
 
 @router.get("/session/history")
-def get_session_history(
+async def get_session_history(
     session_id: str = Query(..., description="会话ID"),
     current=Depends(get_current_user),
 ):
     """查询会话历史记录（仅属主可查，React 前端历史展示专用）"""
-    _assert_session_owner(session_id, current["uid"])
+    await _assert_session_owner(session_id, current["uid"])
     try:
-        res_data = SessionManager.get_session_playback_data(session_id)
+        res_data = await run_in_threadpool(_load_playback_sync, session_id)
         if not res_data:
             return {"code": 404, "msg": "会话不存在", "data": None}
         return {"code": 0, "msg": "success", "data": res_data}

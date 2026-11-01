@@ -1,4 +1,4 @@
-from rag.chroma.chroma_client import chroma_db
+from data.vectorstore.chroma.chroma_client import chroma_db
 import uuid
 
 def exist_doc(source_name: str) -> bool:

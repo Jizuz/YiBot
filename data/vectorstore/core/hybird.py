@@ -7,7 +7,7 @@ from langchain_community.retrievers import BM25Retriever
 from langchain_classic.retrievers import EnsembleRetriever
 from langchain_core.documents import Document
 
-from rag.chroma.chroma_client import embdding, chroma_db
+from data.vectorstore.chroma.chroma_client import embdding, chroma_db
 
 class HybridRetriever:
     """Chroma 向量召回 + BM25 关键词召回。"""

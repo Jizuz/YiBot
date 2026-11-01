@@ -7,8 +7,8 @@ from langgraph.types import Command
 from orchestration.struct.consult_state import ConsultState
 from orchestration.struct.schemas import EducationResult, KBSearchPlan
 from orchestration.model_provider import get_orch_model as _get_model
-from rag.core.hybird import format_retrieved_context
-from rag.core.hybird import HybridRetriever as retriever
+from data.vectorstore.core.hybird import format_retrieved_context
+from data.vectorstore.core.hybird import HybridRetriever as retriever
 from tools.mcp import MCP_TIMEOUT, TOOL_SEARCH_KNOWLEDGE_BASE, get_mcp_tool_by_name
 from orchestration.prompts.education import EDUCATION_PROMPT, KB_GROUP_ANALYSIS_PROMPT
 
