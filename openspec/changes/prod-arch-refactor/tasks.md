@@ -21,7 +21,7 @@
 | T11 | ✅[测试+实现] 前端请求层：Chatte `src/api/http.ts` authFetch（Bearer 注入 / 401 单飞续期 / 重放一次 / 失败登出）+ `tokenStore.ts`（access 内存 + refresh localStorage `chatte-refresh`）+ `src/api/auth.ts` 四接口 | access-auth | P1 | 4h | 前端 api 层 + 续期重放测试 | T9（联调可后置） |
 | T12 | ✅[实现] 前端登录态迁移：`useAuth.ts` 改走 /user/login（响应无密码）；启动静默续期；登出调服务端 + 清理旧键 `chatte-auth`；删除 `api/user.ts` 伪登录链路；`config/index.ts` api 地址更新 | access-auth | P1 | 3h | 前端登录流改造 | T11 |
 | T13 | ✅[实现] 前端去 user_id：`chat.ts / session.ts / message.ts` 全部改走 authFetch 并移除 user_id 传参（含 SSE 请求带 Authorization）；DevTools 验证清单执行 | access-auth | P1 | 2h | 前端请求改造 + 验证记录 | T11, T12 |
-| T14 | [实现] 网关部署：`deploy/docker-compose.yml`（apisix+etcd）+ `config.yaml` + `routes.yaml`（limit-concurrency/limit-req/limit-count[redis]/api-breaker/cors 白名单/SSE 参数预留注释） | gateway-traffic-governance | P2 | 4h | deploy/ 全套配置 | T4（限流阈值可配） |
+| T14 | ✅[实现] 网关部署：`deploy/docker-compose.yml`（apisix+etcd）+ `config.yaml` + `routes.yaml`（limit-concurrency/limit-req/limit-count[redis]/api-breaker/cors 白名单/SSE 参数预留注释） | gateway-traffic-governance | P2 | 4h | deploy/ 全套配置 | T4（限流阈值可配） |
 | T15 | [验证] 网关演练：wrk 压测触发并发/速率限流；停后端验证熔断→冷却→半开；登录 21 次/分触发限流；前端 base 切 9080 + 8000 外网收敛操作手册 | gateway-traffic-governance | P2 | 3h | 演练记录 + 切流手册 | T14, T10 |
 | T16 | ✅[测试+实现] token 计量：`model/callbacks/token_meter.py` 全局 CallbackHandler（on_llm_end 解析 token_usage，异步入账失败不影响主流程）；覆盖 supervisor/子 Agent/折叠/路由全部调用点验证 | llm-token-quota | P2 | 3h | token_meter + 单测 | T6 |
 | T17 | ✅[测试+实现] 配额核心：`core/quota.py`——检查/入账（INCRBY）/查询/剩余预警阈值；`quota:llm:{uid}:{date}` TTL 48h；fakeredis 全场景（累计/跨日/超限/边界） | llm-token-quota | P2 | 3h | core/quota.py + `tests/core/test_quota.py` | T16, T7 |

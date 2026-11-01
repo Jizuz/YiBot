@@ -1,0 +1,43 @@
+# APISIX + etcd 网关部署（T14，spec: gateway-traffic-governance）
+#
+# 用法：
+#   cd deploy && docker compose up -d
+#   网关入口 :9080，后端 YiBot :8000 不再对外暴露（云安全组收敛）
+#
+# 说明：APISIX 以 standalone 模式运行（路由直接读 apisix/routes.yaml，
+# 无需 etcd 亦可工作）；etcd 服务保留，供后续切换控制面/多实例共享配置时启用。
+#
+# 环境变量（可在 deploy/.env 覆盖）：
+#   APISIX_UPSTREAM_HOST  后端主机（默认 host.docker.internal：容器访问宿主 YiBot:8000）
+#   APISIX_REDIS_HOST     limit-count 共享计数 Redis 主机
+#   APISIX_REDIS_PASSWORD Redis 密码（可空）
+
+services:
+  etcd:
+    image: bitnami/etcd:3.5
+    container_name: yibot-etcd
+    environment:
+      ALLOW_NONE_AUTHENTICATION: "yes"
+      ETCD_ADVERTISE_CLIENT_URLS: http://etcd:2379
+    volumes:
+      - etcd_data:/bitnami/etcd
+    restart: unless-stopped
+
+  apisix:
+    image: apache/apisix:3.13.0
+    container_name: yibot-apisix
+    restart: unless-stopped
+    depends_on:
+      - etcd
+    ports:
+      - "9080:9080"   # 网关唯一对外入口（8000 由云安全组收敛）
+    environment:
+      APISIX_UPSTREAM_HOST: ${APISIX_UPSTREAM_HOST:-host.docker.internal}
+      APISIX_REDIS_HOST: ${APISIX_REDIS_HOST:-host.docker.internal}
+      APISIX_REDIS_PASSWORD: ${APISIX_REDIS_PASSWORD:-}
+    volumes:
+      - ./apisix/config.yaml:/usr/local/apisix/conf/config.yaml:ro
+      - ./apisix/routes.yaml:/usr/local/apisix/conf/routes.yaml:ro
+
+volumes:
+  etcd_data:

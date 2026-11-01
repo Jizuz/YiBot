@@ -1,0 +1,30 @@
+# APISIX standalone 配置（T14）
+# 部署角色 data_plane + yaml 配置源：路由见同目录 routes.yaml（变更后重启容器生效）
+deployment:
+  role: data_plane
+  role_data_plane:
+    config_provider: yaml
+
+# Admin API 关闭（standalone 模式不需要）
+apisix:
+  node_listen:
+    - 9080
+  enable_admin: false
+  enable_admin_cors: false
+
+# SSE 长连接预留（P5 后端流式化后启用，design: 限流熔断降级）
+nginx_config:
+  http:
+    proxy_read_timeout: 300s          # 长流式响应读超时
+    proxy_send_timeout: 300s
+    proxy_buffering: "off"            # 禁用响应缓冲（SSE 逐段透传）
+  error_log:
+    level: warn
+
+plugin_attr:
+  limit-count:
+    # 跨实例共享计数经 Redis（spec：登录防爆破计数不得被多实例稀释）
+    redis:
+      host: "${APISIX_REDIS_HOST}"
+      port: 6379
+      password: "${APISIX_REDIS_PASSWORD}"

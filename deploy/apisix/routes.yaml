@@ -1,0 +1,131 @@
+# APISIX standalone 路由与插件（T14，阈值与 design「限流、熔断、降级」表一致）
+# 注意：阈值调整只改本文件（CR 阻断项：限流熔断阈值不得硬编码进应用代码）
+# 后端上游：宿主 YiBot:8000（容器内经 APISIX_UPSTREAM_HOST 解析）
+
+upstreams:
+  - id: yibot_backend
+    nodes:
+      "host.docker.internal:8000": 1
+    type: roundrobin
+    # 健康检查：后端不可达时熔断计数累积
+    checks:
+      active:
+        type: http
+        http_path: /
+        timeout: 3
+        healthy:
+          interval: 3
+          successes: 2
+        unhealthy:
+          interval: 2
+          failures: 3
+
+global_rules:
+  - id: cors_global
+    plugins:
+      cors:
+        # CORS 收敛至网关（design：白名单 = 本地开发 + 生产前端域名）
+        allow_origins: "http://localhost:5173,http://127.0.0.1:5173"
+        allow_methods: "GET,POST,PUT,DELETE,OPTIONS"
+        allow_headers: "Authorization,Content-Type,X-Request-Id"
+        expose_headers: "X-Request-Id"
+        max_age: 3600
+
+routes:
+  # ---- 问诊对话：长耗时 LLM，限并发为主、速率为辅（design 表）----
+  - id: chat_agent
+    uri: /chat/agent
+    upstream_id: yibot_backend
+    plugins:
+      limit-concurrency:
+        concurrency: 50
+        key: remote_addr
+        rejected_code: 429
+        rejected_msg: "当前咨询人数较多，请稍后再试"
+      limit-req:
+        rate: 2
+        burst: 5
+        key_type: var
+        key: remote_addr
+        rejected_code: 429
+        rejected_msg: "当前咨询人数较多，请稍后再试"
+      api-breaker:
+        break_response_code: 503
+        unhealthy:
+          http_statuses: [500, 502, 503, 504]
+          failures: 3
+        healthy:
+          successes: 2
+        timeout: 10   # 熔断 10s 后进入半开探测
+
+  # ---- 其余对话/会话类：普通查询 ----
+  - id: chat_rest
+    uri: /chat/*
+    upstream_id: yibot_backend
+    plugins:
+      limit-req:
+        rate: 10
+        burst: 20
+        key_type: var
+        key: remote_addr
+        rejected_code: 429
+      api-breaker:
+        break_response_code: 503
+        unhealthy:
+          http_statuses: [500, 502, 503, 504]
+          failures: 3
+        healthy:
+          successes: 2
+        timeout: 10
+
+  # ---- 登录/续期：按 IP 次数限流，防撞库爆破（跨实例 Redis 计数）----
+  - id: user_login
+    uri: /user/login
+    upstream_id: yibot_backend
+    plugins:
+      limit-count:
+        count: 20
+        time_window: 60
+        key_type: var
+        key: remote_addr
+        policy: redis
+        rejected_code: 429
+        rejected_msg: "操作过于频繁，请稍后再试"
+  - id: user_refresh
+    uri: /user/token/refresh
+    upstream_id: yibot_backend
+    plugins:
+      limit-count:
+        count: 20
+        time_window: 60
+        key_type: var
+        key: remote_addr
+        policy: redis
+        rejected_code: 429
+        rejected_msg: "操作过于频繁，请稍后再试"
+
+  # ---- 用户/配额接口：普通限速 ----
+  - id: user_rest
+    uri: /user/*
+    upstream_id: yibot_backend
+    plugins:
+      limit-req:
+        rate: 10
+        burst: 20
+        key_type: var
+        key: remote_addr
+        rejected_code: 429
+
+  # ---- 知识库管理类：从严 ----
+  - id: rag_all
+    uri: /rag/*
+    upstream_id: yibot_backend
+    plugins:
+      limit-req:
+        rate: 5
+        burst: 10
+        key_type: var
+        key: remote_addr
+        rejected_code: 429
+
+# END
