@@ -9,6 +9,7 @@ from api.deps.auth import get_current_user
 from api.deps.db import get_db
 from api.responses import BIZ_CODE, BizError, ok
 from config.settings import get_settings
+from core import quota
 from core import security
 from core.security import SecurityError
 from schemas.auth_schema import LoginIn, LogoutIn, RefreshIn
@@ -115,15 +116,18 @@ async def logout(
 
 
 @router.get("/quota")
-async def quota(current=Depends(get_current_user)):
-    """当日配额查询（T18 接入真实计量，当前占位结构）。"""
+async def quota_query(request: Request, current=Depends(get_current_user)):
+    """当日配额查询（真实计量数据，spec: llm-token-quota）。"""
     settings = get_settings()
-    quota_value = settings.LLM_DAILY_TOKEN_QUOTA
+    redis = _request_redis(request)
+    used, quota_value, remaining = await quota.get_usage(
+        redis, current["uid"], settings.LLM_DAILY_TOKEN_QUOTA
+    )
     return ok({
         "date": date.today().isoformat(),
-        "used": 0,
+        "used": used,
         "quota": quota_value,
-        "remaining": quota_value,
+        "remaining": remaining,
     })
 
 

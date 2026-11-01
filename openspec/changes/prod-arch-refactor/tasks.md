@@ -25,7 +25,7 @@
 | T15 | [验证] 网关演练：wrk 压测触发并发/速率限流；停后端验证熔断→冷却→半开；登录 21 次/分触发限流；前端 base 切 9080 + 8000 外网收敛操作手册 | gateway-traffic-governance | P2 | 3h | 演练记录 + 切流手册 | T14, T10 |
 | T16 | ✅[测试+实现] token 计量：`model/callbacks/token_meter.py` 全局 CallbackHandler（on_llm_end 解析 token_usage，异步入账失败不影响主流程）；覆盖 supervisor/子 Agent/折叠/路由全部调用点验证 | llm-token-quota | P2 | 3h | token_meter + 单测 | T6 |
 | T17 | ✅[测试+实现] 配额核心：`core/quota.py`——检查/入账（INCRBY）/查询/剩余预警阈值；`quota:llm:{uid}:{date}` TTL 48h；fakeredis 全场景（累计/跨日/超限/边界） | llm-token-quota | P2 | 3h | core/quota.py + `tests/core/test_quota.py` | T16, T7 |
-| T18 | [测试+实现] 配额接入：`/chat/agent` 入口前置拦截（graph.ainvoke 之前，超限 429 业务码+话术不进图）+ `QUOTA_ENFORCE` 观察模式开关 + `GET /user/quota` 接口 + 预警话术 | llm-token-quota | P2 | 3h | 拦截逻辑 + quota 接口 + mock graph 零调用断言 | T17 |
+| T18 | ✅[测试+实现] 配额接入：`/chat/agent` 入口前置拦截（graph.ainvoke 之前，超限 429 业务码+话术不进图）+ `QUOTA_ENFORCE` 观察模式开关 + `GET /user/quota` 接口 + 预警话术 | llm-token-quota | P2 | 3h | 拦截逻辑 + quota 接口 + mock graph 零调用断言 | T17 |
 | T19 | [实现] 编排归位：`agent/` → `orchestration/` 纯平移（graph/supervisor/sub_agent/struct）+ `orchestration/prompts/` 集中 6 处 prompt（内容不变）+ 模块级模型单例改 lifespan 注入；平移后三链路回归 | production-hardening | P3 | 4h | orchestration/ + 回归记录 | T10, T18（业务功能全就绪后） |
 | T20 | [实现] 数据层归位：`database/+manager/+rag/` → `data/`；repo 统一 session 上下文（contextmanager）+ 异常上抛不吞错 + `echo=False`；checkpointer host/port 配置化；`async_db_save` 裸线程改受控 asyncio 任务（队列上限+失败日志） | production-hardening | P3 | 4h | data/ + 回归记录 | T19 |
 | T21 | [实现] 模型层归位：`llm/` → `model/provider.py`（timeout/max_retries/temperature 可配）+ `graph.ainvoke` 补 recursion_limit + 依赖方向静态检查脚本（无反向 import）+ 全量 print 清零 grep | production-hardening | P3 | 3h | model/ + 检查脚本 | T19, T20 |

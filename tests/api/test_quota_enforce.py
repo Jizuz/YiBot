@@ -43,6 +43,9 @@ class FakeGraph:
             LLMResult(generations=[], llm_output={"token_usage": {"total_tokens": 40}}),
             run_manager=None,
         )
+        # 让出控制权，使异步入账任务（create_task）完成调度
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
         return {
             "messages": [AIMessage(content="回复内容")],
             "need_emergency": False,

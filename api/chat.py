@@ -6,9 +6,12 @@ from langchain_core.messages import HumanMessage
 from pydantic import BaseModel
 
 from api.deps.auth import get_current_user
-from api.responses import BizError
+from api.responses import BIZ_CODE, BizError
+from config.settings import get_settings
+from core import quota
 from llm.simple_chat_model import get_ai_response
 from manager.session_manager import SessionManager
+from model.callbacks.token_meter import reset_meter_uid, set_meter_uid
 
 logger = logging.getLogger("yibot.api.chat")
 
@@ -44,24 +47,54 @@ async def common_ask_agent(
     uid = current["uid"]
     logger.info("chat agent start", extra={"event": "chat_agent", "uid": uid})
 
+    # ---- LLM 配额前置拦截（spec: llm-token-quota；必须在进图之前）----
+    settings = get_settings()
+    redis = getattr(request.app.state, "redis", None)
+    if settings.QUOTA_ENFORCE and redis is not None:
+        allowed, _used, _remaining = await quota.check(
+            redis, uid, settings.LLM_DAILY_TOKEN_QUOTA
+        )
+        if not allowed:
+            logger.warning(
+                "quota exceeded", extra={"event": "quota_blocked", "uid": uid}
+            )
+            raise BizError(
+                BIZ_CODE.QUOTA_EXCEEDED,
+                "今日咨询额度已用完，明天再来吧～（您也可以在个人页查看用量）",
+            )
+
     graph = request.app.state.graph
     # thread_id 与 Checkpointer 存量数据绑定：格式 user-{uid}-{sid} 不可变更
     thread_id = f"user-{uid}-{session_id}"
     config = {"configurable": {"thread_id": thread_id}}
-    result = await graph.ainvoke(
-        {"messages": [{"role": "user", "content": question}], "user_id": uid, "session_id": session_id},
-        config=config,
-    )
+    meter_token = set_meter_uid(uid)  # 全链路 LLM 调用计量身份
+    try:
+        result = await graph.ainvoke(
+            {"messages": [{"role": "user", "content": question}], "user_id": uid, "session_id": session_id},
+            config=config,
+        )
+    finally:
+        reset_meter_uid(meter_token)
     last = result["messages"][-1]
     # 防御: 若图被静默中断(如 goto 未注册节点), 最后一条仍是用户消息, 不能原样回显
     if isinstance(last, HumanMessage) or not getattr(last, "content", None):
-        return {
-            "reply": "抱歉，刚才的处理似乎中断了，请重新发送您的问题。",
-            "need_emergency": result.get("need_emergency", False),
-            "active_agent": result.get("active_agent"),
-        }
+        reply = "抱歉，刚才的处理似乎中断了，请重新发送您的问题。"
+    else:
+        reply = last.content
+
+    # ---- 剩余量预警话术（spec：剩余低于阈值随回复提示）----
+    if redis is not None:
+        _used, _quota_value, remaining = await quota.get_usage(
+            redis, uid, settings.LLM_DAILY_TOKEN_QUOTA
+        )
+        if settings.LLM_DAILY_TOKEN_QUOTA > 0 and (
+            remaining / settings.LLM_DAILY_TOKEN_QUOTA
+            < (1 - settings.QUOTA_WARN_RATIO)
+        ):
+            reply = f"{reply}\n\n（提示：今日咨询额度剩余不足，请合理安排提问～）"
+
     return {
-        "reply": last.content,
+        "reply": reply,
         "need_emergency": result.get("need_emergency", False),
         "active_agent": result.get("active_agent"),
     }
