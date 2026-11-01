@@ -6,35 +6,20 @@ from langchain.agents import create_agent
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langgraph.types import Command
 
-from agent.struct.consult_state import ConsultState
-from agent.struct.memory import (
+from orchestration.struct.consult_state import ConsultState
+from orchestration.struct.memory import (
     PRIVATE_KEEP_TAIL,
     PRIVATE_MSG_LIMIT,
     background_block,
     fold_messages,
 )
-from agent.struct.schemas import AppointingTurn, RightMatch, RightsIntent
-from llm.base_llm import chat_model
+from orchestration.struct.schemas import AppointingTurn, RightMatch, RightsIntent
+from orchestration.model_provider import get_orch_model as _get_model
 from tools.mcp import get_mcp_tools
+from orchestration.prompts.rights import RIGHTS_PROMPT, RIGHTS_INTENT_PROMPT, APPOINTING_TURN_PROMPT, RIGHT_MATCH_PROMPT
 
-model = chat_model()
+model = _get_model()
 
-RIGHTS_PROMPT = """你是用户权益服务助手，负责帮助用户查询和使用医疗健康类权益（如洁牙卡、体检卡等）。
-
-## 可用工具（由 MCP Server 提供，以实际加载为准）
-- get_right_list： 查询用户权益列表，参数 userId（整数）
-- get_nearby_stores： 查询附近可用门店，参数 location（地点描述）
-- queryWeather： 查询天气，参数 city（城市）
-
-## 工作规则
-1. 用户查询权益、询问自己有什么权益时：调用 get_right_list，用简洁列表呈现权益名称、有效期等关键信息
-2. 用户想使用权益或寻找服务门店时：先调用 get_right_list 确认权益，再根据用户所在位置调用 get_nearby_stores 推荐门店
-3. 严格基于工具返回结果回答，禁止编造权益或门店数据
-4. 工具调用失败时，如实告知用户权益服务暂时不可用，请稍后再试
-5. 用中文简洁、友好地回答
-6. 用户提出"使用权益、预约服务"等办理类诉求时，不要调用工具，说明将转由专属预约流程为其办理
-
-{user_id_hint}"""
 
 
 # ==================== 权益预约流程 ====================
@@ -48,40 +33,8 @@ RIGHTS_PROMPT = """你是用户权益服务助手，负责帮助用户查询和�
 #   appoint_service 下单
 # 任一环节失败/用户取消: 委婉终止并清空状态, 本次不预约。
 
-RIGHTS_INTENT_PROMPT = """判断用户当前对"医疗健康权益"的诉求类型，只输出分类：
-- query：查询/了解类（查我有什么权益、看有效期、问哪家门店可以用等）
-- appointing：使用/办理类（我想用某项权益、帮我预约洁牙、我要使用体检卡等）"""
 
-APPOINTING_TURN_PROMPT = """你是医疗健康权益的预约助手，正在通过多轮对话为用户办理权益使用预约。
 
-今天是 {today}。
-
-当前已收集的预约信息：
-{slots}
-
-当前流程阶段：{stage}
-
-请仔细阅读对话历史（重点理解用户最新一条消息），完成：
-1. 判断 intent（cancel=用户要取消/算了；other=与权益预约完全无关；continue=继续预约流程）
-2. 抽取槽位（仅基于用户明确给出的内容，禁止推测编造，没有则 null）：
-   user_name 真实姓名 / mobile 11位手机号 / appoint_datetime 预约日期(标准化为 YYYY-MM-DD，口语日期按今天换算)
-   / desired_right 想使用的权益名称（若用户用序号回答如"第一个/1"，请结合上一轮列出的权益换成对应权益名称）
-   / location 所在城市或区域 / chosen_store 选择的门店名称（若用户用序号回答，结合上一轮门店列表换成门店名称）
-   ⚠ appoint_datetime 必须来自用户明确说过的日期；用户没有提到任何日期时必须为 null，严禁用今天或其他日期默认填充
-3. next_question：intent=continue 且仍有必填信息缺失时，生成自然友好的下一个追问（一次只问一项）；否则 null"""
-
-RIGHT_MATCH_PROMPT = """你是权益匹配助手。
-
-用户此前表达的意向权益：{desired}
-用户最新回复（可能是权益名称、序号如"第一个/1/第二项"、或口语指代）：{last_reply}
-
-用户名下的权益列表（按展示顺序）：
-{rights}
-
-请判断用户想使用哪一项权益（返回该条目中 rightId 字段的整数值）：
-- 用户最新回复中的名称或序号能唯一对应列表中某一项时，返回该项的 rightId（如"第一个"对应列表第 1 项）
-- 最新回复无法判断但此前意向明确唯一对应某项时，返回该项的 rightId
-- 无法唯一确定时，rightId 返回 null"""
 
 APPOINTING_SERVICE_DOWN_MSG = "抱歉，权益预约服务暂时不太稳定，为避免出错本次就先不为您预约啦～您可以稍后再试，或联系客服协助处理，感谢理解！"
 APPOINTING_CANCEL_MSG = "好的，已为您取消本次预约申请～您随时想预约都可以再找我，祝您生活愉快！"

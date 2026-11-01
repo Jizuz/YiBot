@@ -2,11 +2,12 @@ from langchain.agents import create_agent
 from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.graph import MessagesState
 
-from llm.base_llm import chat_model
+from orchestration.model_provider import get_orch_model as _get_model
+from orchestration.prompts.chit_chat import CHIT_CHAT_PROMPT
 from tools.custom_tools import *
 from tools.mcp import *
 
-model = chat_model()
+model = _get_model()
 
 async def chit_chat(state: MessagesState) -> dict:
     last_msg = state["messages"][-1].content
@@ -29,7 +30,7 @@ async def chit_chat(state: MessagesState) -> dict:
         model,
         mcp_tools,
         # middleware=[handle_tool_errors],
-        system_prompt="你是一个乐于助人的智能助手，擅长分析当前问题，分解复杂的步骤并决定每一步需要使用到的工具以及工具间的执行顺序，然后解决问题")
+        system_prompt=CHIT_CHAT_PROMPT)
 
     user_msg = HumanMessage(content=last_msg)
     response = await agent.ainvoke({"messages": user_msg})
