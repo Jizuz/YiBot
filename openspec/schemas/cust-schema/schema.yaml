@@ -1,0 +1,29 @@
+name: cust-schema
+version: 1
+description: 定制工作流 - 提案 → 业务规格 → 技术方案 → 任务清单
+artifacts:
+  - id: proposal
+    generates: proposal.md
+    description: 变更提案（动因、范围、目标边界）
+    template: proposal.md
+  - id: specs
+    generates: "specs/**/*.md"
+    description: 业务规格（对齐产品测试的场景与需求）
+    template: spec.md
+  - id: design
+    generates: design.md
+    description: 技术方案（存储、事务、灰度、回滚、CR阻断清单）
+    template: design.md
+    requires: [proposal, specs]
+  - id: tasks
+    generates: tasks.md
+    description: 开发任务拆解清单
+    template: tasks.md
+    requires: [proposal, specs, design]
+
+apply:
+  requires: [ tasks ]
+  tracks: tasks.md
+  instruction: |
+    Read context files, work through pending tasks, mark complete as you go.
+    Pause if you hit blockers or need clarification.

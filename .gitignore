@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+.DS_Store
+
+# 环境变量文件（密钥不入库；模板见 .env.example）
+.env
+.env.*
+!.env.example
+
+# 本地向量库产物（chroma 持久化目录）
+vector_db/
+
+# 测试与工具产物
+.pytest_cache/
+.coverage

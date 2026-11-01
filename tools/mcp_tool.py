@@ -1,3 +1,5 @@
+import os
+
 import requests
 from typing import Annotated
 
@@ -32,10 +34,13 @@ mcp = FastMCP("local_mcp")
 @mcp.tool(name="city_weather", description="查询指定城市的天气情况")
 async def get_weather(city: Annotated[str, Field(description="目标城市名称（中文全称）", examples=["北京", "上海", "杭州", "深圳"])]) -> str:
     """获取指定城市天气"""
-    AMAP_KEY = "f26670393f1020c4f000fc2abffd560f"
+    # 高德开放平台 Key：从环境变量读取（轮换后的新 Key 配置在 .env 的 AMAP_KEY）
+    amap_key = os.getenv("AMAP_KEY")
+    if not amap_key:
+        return "❌ 天气服务未配置（缺少 AMAP_KEY），请联系管理员"
 
     # 高德天气基础查询接口
-    url = f"https://restapi.amap.com/v3/weather/weatherInfo?city={city}&key={AMAP_KEY}&extensions=base"
+    url = f"https://restapi.amap.com/v3/weather/weatherInfo?city={city}&key={amap_key}&extensions=base"
 
     try:
         response = requests.get(url, timeout=10)
@@ -64,18 +69,6 @@ async def get_weather(city: Annotated[str, Field(description="目标城市名称
     except Exception as e:
         return f"❌ 获取天气异常，异常原因:{str(e)}"
 
-# @mcp.tool(name="basic_calculate", description="执行基础数学计算，支持加减乘除基本运算")
-# async def calculate(expression: Annotated[str, Field(description="数学计算表达式", examples=["1 + 2", "4 * 9 + 23"])]) -> str:
-#     """执行数学计算，支持加减乘除基本运算"""
-#     try:
-#         # 安全地计算数学表达式
-#         result = eval(expression, {"__builtins__": {}}, {})
-
-#         print("basic_calculate execute!")
-
-#         return (f"计算结果 {expression} = {result}")
-#     except Exception as e:
-#         return f"计算错误: {e}"
 
 if __name__ == "__main__":
     mcp.run(transport="stdio")
