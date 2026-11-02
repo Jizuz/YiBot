@@ -9,9 +9,24 @@ from orchestration.struct.consult_state import ConsultState
 from orchestration.struct.schemas import EducationResult, KBSearchPlan
 from orchestration.model_provider import get_orch_model as _get_model
 from data.vectorstore.core.hybird import format_retrieved_context
-from data.vectorstore.core.hybird import HybridRetriever as retriever
+from data.vectorstore.core.hybird import HybridRetriever
 from tools.mcp import MCP_TIMEOUT, TOOL_SEARCH_KNOWLEDGE_BASE, get_mcp_tool_by_name
 from orchestration.prompts.education import EDUCATION_PROMPT, KB_GROUP_ANALYSIS_PROMPT
+
+# 本地 RAG 检索器懒实例化（e2e 发现存量缺陷修复：原实现直接以类调用
+# retriever.retrieve(...)，未实例化导致降级路径首次执行即 TypeError）
+_retriever_instance = None
+
+
+def _get_retriever():
+    global _retriever_instance
+    if _retriever_instance is None:
+        import os as _os
+
+        _retriever_instance = HybridRetriever(
+            chroma_path=_os.getenv("CHROMA_PERSIST_PATH", "./vector_db")
+        )
+    return _retriever_instance
 logger = logging.getLogger("orchestration.sub_agent.education_agent")
 
 model = _get_model()
@@ -186,7 +201,7 @@ async def education_agent_node(state: ConsultState) -> Command:
         logger.info(f"✅ education 检索命中 MCP search_knowledge_base(分组: {doc_group or '全部'})")
     else:
         logger.info("ℹ️ education 使用本地 RAG 检索(MCP search_knowledge_base 不可用)")
-        docs = retriever.retrieve(query, k=5)
+        docs = _get_retriever().retrieve(query, k=5)
         if not docs:
             # 检索资料未覆盖: 不让 LLM 凭空生成, 转症状采集->分诊链路
             logger.info("ℹ️ education 检索未覆盖该问题, 转症状采集->分诊链路")

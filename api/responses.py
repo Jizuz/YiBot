@@ -11,7 +11,7 @@ import logging
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from starlette.middleware.base import BaseHTTPMiddleware
+
 
 from core.biz_codes import BIZ_CODE  # noqa: F401 - 统一业务码下沉 core
 from core.logging import (
@@ -72,16 +72,35 @@ def fail(code: int, msg: str, data=None) -> dict:
     return _payload(code, msg, data)
 
 
-class TraceIdMiddleware(BaseHTTPMiddleware):
-    """透传/生成 trace_id，贯穿请求上下文并回写响应头。"""
+class TraceIdMiddleware:
+    """透传/生成 trace_id，贯穿请求上下文并回写响应头。
 
-    async def dispatch(self, request: Request, call_next):
-        trace_id = request.headers.get("X-Request-Id") or new_trace_id()
+    纯 ASGI 实现（不继承 BaseHTTPMiddleware）：e2e 发现其 call_next 任务组
+    在客户端断连时的取消传播会损坏 redis.asyncio 池内连接，污染后续请求
+    （Future attached to a different loop / Event loop is closed）。
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        headers = {k.lower(): v for k, v in scope.get("headers", [])}
+        trace_id = headers.get(b"x-request-id", b"").decode() or new_trace_id()
         token = set_trace_id(trace_id)
+
+        async def send_wrapper(message):
+            if message["type"] == "http.response.start":
+                raw_headers = list(message.get("headers") or [])
+                raw_headers.append((b"x-request-id", trace_id.encode()))
+                message = {**message, "headers": raw_headers}
+            await send(message)
+
         try:
-            response = await call_next(request)
-            response.headers["X-Request-Id"] = trace_id
-            return response
+            await self.app(scope, receive, send_wrapper)
         finally:
             reset_trace_id(token)
 

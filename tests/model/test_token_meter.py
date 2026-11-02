@@ -48,6 +48,8 @@ def test_meter_records_usage(_redis):
         handler.on_llm_end(_llm_result(total_tokens=200), run_manager=_FakeRunManager())
     finally:
         reset_meter_uid(token)
+    # 同步上下文：入队 → worker（drain_once）消费入账
+    asyncio.run(handler.drain_once())
     assert asyncio.run(quota.get_used(_redis, uid=42)) == 200
 
 
@@ -62,4 +64,30 @@ def test_meter_skips_without_uid(_redis):
     handler = TokenMeterCallbackHandler()
     handler.on_llm_end(_llm_result(), run_manager=_FakeRunManager())
     assert asyncio.run(quota.get_used(_redis, uid=42)) == 0
+
+
+def test_meter_in_thread_context_defers_to_queue(_redis):
+    """同步线程上下文（LangChain executor）：不得新建 loop 触碰共享客户端，
+    记账经线程安全队列由常驻 worker 消费（e2e 发现的跨 loop 池污染修复）。"""
+    handler = TokenMeterCallbackHandler()
+    token = set_meter_uid(55)
+    try:
+        handler.on_llm_end(
+            LLMResult(
+                generations=[],
+                llm_output={"token_usage": {"total_tokens": 77}},
+            ),
+            run_manager=_FakeRunManager(),
+        )
+    finally:
+        reset_meter_uid(token)
+
+    pending = handler.pending_queue()
+    assert not pending.empty(), "线程上下文必须入队而非新建 loop"
+    uid, tokens = pending.get_nowait()
+    assert (uid, tokens) == (55, 77)
+    pending.put_nowait((uid, tokens))  # 放回供 drain 消费
+
+    asyncio.run(handler.drain_once())
+    assert asyncio.run(quota.get_used(_redis, uid=55)) == 77
 
