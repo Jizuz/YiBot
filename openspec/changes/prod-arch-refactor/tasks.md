@@ -31,7 +31,7 @@
 | T21 | ✅[实现] 模型层归位：`llm/` → `model/provider.py`（timeout/max_retries/temperature 可配）+ `graph.ainvoke` 补 recursion_limit + 依赖方向静态检查脚本（无反向 import）+ 全量 print 清零 grep | production-hardening | P3 | 3h | model/ + 检查脚本 | T19, T20 |
 | T22 | ✅[实现] Alembic 引入：baseline 对齐三表现状 + `migrate_dedup_mobile.py` 去重脚本（清单人工复核）+ 迁移 001 `uk_user_mobile`；002 删列脚本**只准备不执行** | security-hardening | P3 | 3h | alembic 环境 + 脚本 | T8 |
 | T23 | ✅[实现] 清尾扫描：`scripts/migrate_hash_pwd_report.py` 基线报告 + 每日定时只读扫描告警 | security-hardening | P3 | 2h | 扫描脚本 + 基线报告 | T22 |
-| T24 | 🔶[验证] 全量回归与回写：三链路 e2e（问诊/科普/权益）+ 鉴权/网关/配额验收信号全过 + `技改.md` 回写落地差异（**pytest 105 绿/依赖检查过/文档已回写；e2e 三链路与压测待真实环境**） | 全部 | P3 | 3h | 回归报告 + 文档回写 | T19~T23 |
+| T24 | ✅[验证] 全量回归与回写：三链路 e2e（问诊/科普/权益）+ 鉴权/网关/配额验收信号全过 + `技改.md` 回写落地差异（**pytest 106 绿/依赖检查过/三链路 e2e 真实环境全过/40102+refresh 续期/配额计量真实入账 37775 token/发现并修复 3 项真实缺陷**） | 全部 | P3 | 3h | 回归报告 + 文档回写 | T19~T23 |
 
 ### 任务细分说明
 
