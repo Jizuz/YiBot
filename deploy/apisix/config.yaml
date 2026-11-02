@@ -28,3 +28,8 @@ plugin_attr:
       host: "${APISIX_REDIS_HOST}"
       port: 6379
       password: "${APISIX_REDIS_PASSWORD}"
+
+# limit-concurrency 不在默认插件列表，需显式启用（其余所需插件均在默认集）；
+# 生产全量插件列表请按官方 default-config 增补后启用
+plugins:
+  - limit-concurrency
